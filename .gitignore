@@ -1,0 +1,24 @@
+# Build output
+bin/
+obj/
+dist/
+build/
+*.msi
+*.exe
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local state and secrets
+.env
+*.db
+*.log
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.vs/
+.vscode/
