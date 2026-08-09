@@ -1,0 +1,168 @@
+import {
+  InstanceBase,
+  InstanceStatus,
+  Regex,
+  runEntrypoint,
+} from '@companion-module/base'
+
+class ATLiveOverlayInstance extends InstanceBase {
+  async init(config) {
+    this.config = config
+    this.updateStatus(InstanceStatus.Connecting)
+    this.initActions()
+    this.initFeedbacks()
+    this.initVariables()
+    this.initPresets()
+    await this.pollStatus()
+    this.pollTimer = setInterval(() => this.pollStatus(), 2000)
+  }
+
+  async destroy() {
+    clearInterval(this.pollTimer)
+  }
+
+  async configUpdated(config) {
+    this.config = config
+    await this.pollStatus()
+  }
+
+  getConfigFields() {
+    return [
+      {
+        type: 'textinput',
+        id: 'host',
+        label: 'AT LiveOverlay computer IP / hostname',
+        width: 8,
+        default: '127.0.0.1',
+        regex: Regex.HOSTNAME,
+      },
+      {
+        type: 'number',
+        id: 'port',
+        label: 'HTTP port',
+        width: 4,
+        default: 8765,
+        min: 1,
+        max: 65535,
+      },
+    ]
+  }
+
+  baseUrl() {
+    return `http://${this.config.host || '127.0.0.1'}:${this.config.port || 8765}`
+  }
+
+  async request(path) {
+    const response = await fetch(`${this.baseUrl()}${path}`, { method: 'GET' })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    return response
+  }
+
+  async pollStatus() {
+    try {
+      const response = await this.request('/status')
+      const data = await response.json()
+      this.statusData = data
+      this.updateStatus(InstanceStatus.Ok)
+      this.setVariableValues({
+        version: data.version || '',
+        build: data.build || '',
+        overlay_count: Array.isArray(data.overlays) ? data.overlays.length : 0,
+      })
+      this.checkFeedbacks()
+    } catch (error) {
+      this.updateStatus(InstanceStatus.ConnectionFailure, error.message)
+    }
+  }
+
+  overlayOption() {
+    return { type: 'number', id: 'id', label: 'Overlay ID', default: 1, min: 1, max: 999 }
+  }
+
+  initActions() {
+    const simple = (name, command) => ({
+      name,
+      options: [this.overlayOption()],
+      callback: async (event) => this.request(`/overlay/${event.options.id}/${command}`),
+    })
+
+    this.setActionDefinitions({
+      show: simple('Show overlay', 'show'),
+      hide: simple('Hide overlay', 'hide'),
+      reload: simple('Reload overlay', 'reload'),
+      edit: simple('Edit / move overlay', 'edit'),
+      live: simple('Return overlay to live mode', 'live'),
+      lock: simple('Lock overlay (click-through)', 'lock'),
+      unlock: simple('Unlock overlay', 'unlock'),
+      close: simple('Close overlay', 'close'),
+      set_url: {
+        name: 'Set overlay URL',
+        options: [this.overlayOption(), { type: 'textinput', id: 'url', label: 'URL', default: 'http://10.100.70.101:4007/timer', useVariables: true }],
+        callback: async (event) => {
+          const url = await this.parseVariablesInString(event.options.url)
+          return this.request(`/overlay/${event.options.id}/seturl?url=${encodeURIComponent(url)}`)
+        },
+      },
+      opacity: {
+        name: 'Set overlay opacity',
+        options: [this.overlayOption(), { type: 'number', id: 'value', label: 'Opacity %', default: 100, min: 20, max: 100 }],
+        callback: async (event) => this.request(`/overlay/${event.options.id}/opacity?value=${event.options.value}`),
+      },
+      refresh: {
+        name: 'Set auto-refresh seconds',
+        options: [this.overlayOption(), { type: 'number', id: 'seconds', label: 'Seconds (0 disables)', default: 0, min: 0, max: 3600 }],
+        callback: async (event) => this.request(`/overlay/${event.options.id}/refresh?seconds=${event.options.seconds}`),
+      },
+      create: {
+        name: 'Create overlay',
+        options: [{ type: 'textinput', id: 'url', label: 'URL', default: 'http://10.100.70.101:4007/timer', useVariables: true }],
+        callback: async (event) => {
+          const url = await this.parseVariablesInString(event.options.url)
+          return this.request(`/overlay/create?url=${encodeURIComponent(url)}`)
+        },
+      },
+      show_all: { name: 'Show all overlays', options: [], callback: async () => this.request('/overlay/all/show') },
+      hide_all: { name: 'Hide all overlays', options: [], callback: async () => this.request('/overlay/all/hide') },
+      reload_all: { name: 'Reload all overlays', options: [], callback: async () => this.request('/overlay/all/reload') },
+    })
+  }
+
+  initFeedbacks() {
+    this.setFeedbackDefinitions({
+      visible: {
+        name: 'Overlay is visible',
+        type: 'boolean',
+        defaultStyle: { bgcolor: 0x00aa00, color: 0xffffff },
+        options: [this.overlayOption()],
+        callback: (feedback) => Boolean(this.statusData?.overlays?.find((o) => o.Id === feedback.options.id)?.visible),
+      },
+      locked: {
+        name: 'Overlay is locked',
+        type: 'boolean',
+        defaultStyle: { bgcolor: 0xee7c19, color: 0x000000 },
+        options: [this.overlayOption()],
+        callback: (feedback) => Boolean(this.statusData?.overlays?.find((o) => o.Id === feedback.options.id)?.locked),
+      },
+    })
+  }
+
+  initVariables() {
+    this.setVariableDefinitions([
+      { variableId: 'version', name: 'AT LiveOverlay version' },
+      { variableId: 'build', name: 'AT LiveOverlay build' },
+      { variableId: 'overlay_count', name: 'Overlay count' },
+    ])
+  }
+
+  initPresets() {
+    const style = { text: '$(this:action)', size: 'auto', color: 0xffffff, bgcolor: 0x222222 }
+    this.setPresetDefinitions({
+      show: { type: 'button', category: 'Overlay 1', name: 'Show overlay 1', style: { ...style, text: 'SHOW\nOVERLAY' }, steps: [{ down: [{ actionId: 'show', options: { id: 1 } }], up: [] }], feedbacks: [] },
+      hide: { type: 'button', category: 'Overlay 1', name: 'Hide overlay 1', style: { ...style, text: 'HIDE\nOVERLAY' }, steps: [{ down: [{ actionId: 'hide', options: { id: 1 } }], up: [] }], feedbacks: [] },
+      reload: { type: 'button', category: 'Overlay 1', name: 'Reload overlay 1', style: { ...style, text: 'RELOAD\nOVERLAY' }, steps: [{ down: [{ actionId: 'reload', options: { id: 1 } }], up: [] }], feedbacks: [] },
+      lock: { type: 'button', category: 'Overlay 1', name: 'Lock overlay 1', style: { ...style, text: 'LOCK\nOVERLAY' }, steps: [{ down: [{ actionId: 'lock', options: { id: 1 } }], up: [] }], feedbacks: [] },
+    })
+  }
+}
+
+runEntrypoint(ATLiveOverlayInstance, [])

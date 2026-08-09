@@ -1,0 +1,16 @@
+AT LiveOverlay v3.3.1
+- Fixed the URL editor appearing briefly then hiding behind the always-on-top overlay.
+- URL editor is now owned, modal, topmost, centred on the overlay, and cannot leave the app blocked.
+- Click-through and toolbar state are safely restored after editing or cancelling.
+- Added detailed URL-dialog logging and exception handling.
+
+AT LiveOverlay v3.3.1
+
+- Added MSI-owned Windows Firewall rule for Companion remote control on TCP 8765.
+- Firewall rule applies to Private network profiles and local-subnet clients.
+- Rule is upgraded and removed automatically with the MSI.
+- Added enterprise silent-install, silent-uninstall and version-detection scripts.
+- Added Action1, Intune, Group Policy and PDQ deployment guidance.
+- Added SHA-256 checksum and machine-readable release-info.json generation.
+- Preserved the permanent UpgradeCode and MajorUpgrade behavior.
+- Companion API starts automatically with AT LiveOverlay.
