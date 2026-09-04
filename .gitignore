@@ -5,6 +5,12 @@ dist/
 build/
 *.msi
 *.exe
+publish/
+FINAL-INSTALLER/
+BUILD-LOGS/
+.tools/
+.wix/
+Installer/ATLiveOverlay.wxs
 
 # Python
 __pycache__/

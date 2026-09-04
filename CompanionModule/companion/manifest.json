@@ -1,0 +1,25 @@
+{
+  "id": "at-liveoverlay",
+  "name": "AT LiveOverlay",
+  "shortname": "atliveoverlay",
+  "description": "Control AT LiveOverlay's borderless webpage overlays over its local HTTP API.",
+  "manufacturer": "AT",
+  "products": ["AT LiveOverlay"],
+  "keywords": ["overlay", "presentation", "webpage", "timer", "live"],
+  "version": "0.0.0",
+  "license": "MIT",
+  "repository": "git+https://github.com/adam1991tom/AT-LiveOverlay.git",
+  "bugs": "https://github.com/adam1991tom/AT-LiveOverlay/issues",
+  "maintainers": [
+    {
+      "name": "Adam Tomlinson"
+    }
+  ],
+  "legacyIds": [],
+  "runtime": {
+    "type": "node18",
+    "api": "nodejs-ipc",
+    "apiVersion": "0.0.0",
+    "entrypoint": "../main.js"
+  }
+}

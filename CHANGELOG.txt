@@ -1,3 +1,16 @@
+AT LiveOverlay v4.0.0
+
+- Companion API now requires a per-install token (generated automatically, shown in Remote Control) instead of being open to anyone on the LAN.
+- Added named scenes: save/load a full overlay layout (URLs, positions, opacity, lock/refresh state) from the tray menu or via Companion.
+- Added global hotkeys: Ctrl+Alt+O (show/hide all), Ctrl+Alt+L (lock/unlock all), Ctrl+Alt+R (reload all).
+- Added a Position button on each overlay toolbar for one-click snap to a corner/edge/center.
+- Each overlay's hover toolbar now shows its number and name for quick identification.
+- Overlays now auto-recover from a WebView2 render/browser process crash instead of going blank.
+- Added log rotation so app.log/crash.log no longer grow unbounded on long-running machines.
+- Added a "Start with Windows" toggle in the tray menu.
+- Added an update checker with a one-click, confirmed download-and-install flow (never silent/unattended, since the app runs live during shows).
+- Companion module: added per-overlay dynamic variables, an "overlay exists" feedback, a Load Scene action, a masked (secret-text) token field, and the companion/manifest.json current Companion versions require.
+
 AT LiveOverlay v3.3.1
 - Fixed the URL editor appearing briefly then hiding behind the always-on-top overlay.
 - URL editor is now owned, modal, topmost, centred on the overlay, and cannot leave the app blocked.

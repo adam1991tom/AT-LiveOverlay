@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using System.Net;
+using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Win32;
 
 namespace ATLiveOverlay;
 
@@ -29,13 +32,173 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     private CompanionServer? _server;
     private SplashForm? _splash;
     private System.Windows.Forms.Timer? _splashTimer;
+    private HotkeyManager? _hotkeys;
+    private ToolStripMenuItem? _updateItem;
+    private string? _updateVersion;
+    private string? _updateReleaseUrl;
+    private string? _updateAssetUrl;
+    private string? _updateChecksumUrl;
 
     public OverlayApplicationContext()
     {
         _settings = SettingsStore.Load();
         MigrateSettingsForV220();
         BuildTray();
+        RegisterHotkeys();
         ShowSplashThenStart();
+    }
+
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        try
+        {
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("AT-LiveOverlay-UpdateCheck");
+            client.Timeout = TimeSpan.FromSeconds(10);
+            var json = await client.GetStringAsync("https://api.github.com/repos/adam1991tom/AT-LiveOverlay/releases/latest");
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var tag = root.TryGetProperty("tag_name", out var tagProp) ? tagProp.GetString() : null;
+            var releaseUrl = root.TryGetProperty("html_url", out var urlProp) ? urlProp.GetString() : null;
+
+            var latest = ParseVersion(tag);
+            var current = ParseVersion(BuildInfo.Version);
+            if (latest is null || current is null || latest <= current)
+            {
+                if (manual)
+                    MessageBox.Show("You already have the latest version of AT LiveOverlay.", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string? assetUrl = null;
+            string? checksumUrl = null;
+            if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var asset in assets.EnumerateArray())
+                {
+                    var name = asset.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
+                    var downloadUrl = asset.TryGetProperty("browser_download_url", out var urlProp2) ? urlProp2.GetString() : null;
+                    if (name is null || downloadUrl is null) continue;
+                    if (name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase)) assetUrl = downloadUrl;
+                    else if (name.EndsWith(".msi.sha256", StringComparison.OrdinalIgnoreCase)) checksumUrl = downloadUrl;
+                }
+            }
+
+            _updateVersion = tag;
+            _updateReleaseUrl = releaseUrl;
+            _updateAssetUrl = assetUrl;
+            _updateChecksumUrl = checksumUrl;
+
+            if (_updateItem is not null)
+            {
+                _updateItem.Text = $"Update available: {tag}";
+                _updateItem.Visible = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Exception(ex);
+            if (manual)
+                MessageBox.Show("Could not check for updates. Check your internet connection.", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    // Deliberately not a silent/unattended install: this app runs live during shows, so installing
+    // an update needs an explicit click, not a surprise restart mid-presentation.
+    private async Task OnUpdateClickedAsync()
+    {
+        if (string.IsNullOrEmpty(_updateAssetUrl))
+        {
+            if (!string.IsNullOrEmpty(_updateReleaseUrl))
+            {
+                try { Process.Start(new ProcessStartInfo { FileName = _updateReleaseUrl, UseShellExecute = true }); }
+                catch (Exception ex) { Log.Exception(ex); }
+            }
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            $"AT LiveOverlay {_updateVersion} is available.\n\nDownload and install it now? AT LiveOverlay will close during the update, and Windows may ask you to approve the installer.",
+            "AT LiveOverlay - Update available",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+        if (confirm != DialogResult.Yes) return;
+
+        try
+        {
+            _updateItem!.Enabled = false;
+            _updateItem.Text = "Downloading update...";
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"AT-LiveOverlay-{_updateVersion}-Setup.msi");
+            using (var client = new HttpClient())
+            {
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("AT-LiveOverlay-UpdateCheck");
+                var bytes = await client.GetByteArrayAsync(_updateAssetUrl);
+
+                if (!string.IsNullOrEmpty(_updateChecksumUrl))
+                {
+                    var checksumText = await client.GetStringAsync(_updateChecksumUrl);
+                    var expected = checksumText.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+                    var actual = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+                    if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Downloaded installer failed checksum verification.");
+                }
+
+                await File.WriteAllBytesAsync(tempPath, bytes);
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "msiexec.exe",
+                Arguments = $"/i \"{tempPath}\"",
+                UseShellExecute = true,
+                Verb = "runas"
+            });
+
+            ExitApplication();
+        }
+        catch (Exception ex)
+        {
+            Log.Exception(ex);
+            MessageBox.Show($"The update could not be downloaded or installed.\n\n{ex.Message}", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _updateItem!.Enabled = true;
+            _updateItem.Text = $"Update available: {_updateVersion}";
+        }
+    }
+
+    private static Version? ParseVersion(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        return Version.TryParse(text.TrimStart('v', 'V'), out var version) ? version : null;
+    }
+
+    private void RegisterHotkeys()
+    {
+        try
+        {
+            _hotkeys = new HotkeyManager();
+            _hotkeys.Register(Keys.O, HotkeyManager.ModControl | HotkeyManager.ModAlt, ToggleShowHideAll);
+            _hotkeys.Register(Keys.L, HotkeyManager.ModControl | HotkeyManager.ModAlt, ToggleLockUnlockAll);
+            _hotkeys.Register(Keys.R, HotkeyManager.ModControl | HotkeyManager.ModAlt, () => _forms.ForEach(f => f.ReloadPage()));
+        }
+        catch (Exception ex)
+        {
+            Log.Exception(ex);
+        }
+    }
+
+    private void ToggleShowHideAll()
+    {
+        if (_forms.Count == 0) return;
+        if (_forms.Any(f => f.Visible)) _forms.ForEach(f => f.HideOverlay());
+        else _forms.ForEach(f => f.ShowOverlay());
+    }
+
+    private void ToggleLockUnlockAll()
+    {
+        if (_forms.Count == 0) return;
+        var lockAll = !_forms.All(f => f.Model.ClickThrough);
+        foreach (var form in _forms) form.SetInteractionLocked(lockAll);
     }
 
     private void MigrateSettingsForV220()
@@ -89,6 +252,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             Log.Exception(ex);
         }
 
+        _ = CheckForUpdatesAsync(false);
+
         if (_settings.Overlays.Count == 0)
         {
             NewOverlay();
@@ -102,13 +267,37 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     private void BuildTray()
     {
         var menu = new ContextMenuStrip();
+        _updateItem = new ToolStripMenuItem("Update available") { Visible = false, ForeColor = Color.FromArgb(238, 124, 25) };
+        _updateItem.Click += async (_, _) => await OnUpdateClickedAsync();
+        menu.Items.Add(_updateItem);
+        menu.Items.Add("Check for updates...", null, async (_, _) => await CheckForUpdatesAsync(true));
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("New overlay", null, (_, _) => NewOverlay());
-        menu.Items.Add("Show all", null, (_, _) => _forms.ForEach(f => f.ShowOverlay()));
-        menu.Items.Add("Hide all", null, (_, _) => _forms.ForEach(f => f.HideOverlay()));
-        menu.Items.Add("Reload all", null, (_, _) => _forms.ForEach(f => f.ReloadPage()));
+        menu.Items.Add(new ToolStripMenuItem("Show/hide all", null, (_, _) => ToggleShowHideAll()) { ShortcutKeyDisplayString = "Ctrl+Alt+O" });
+        menu.Items.Add(new ToolStripMenuItem("Lock/unlock all", null, (_, _) => ToggleLockUnlockAll()) { ShortcutKeyDisplayString = "Ctrl+Alt+L" });
+        menu.Items.Add(new ToolStripMenuItem("Reload all", null, (_, _) => _forms.ForEach(f => f.ReloadPage())) { ShortcutKeyDisplayString = "Ctrl+Alt+R" });
         menu.Items.Add("Close all overlays", null, (_, _) => CloseAllOverlays());
         menu.Items.Add(new ToolStripSeparator());
+        var scenesMenu = new ToolStripMenuItem("Scenes");
+        scenesMenu.DropDownOpening += (_, _) => PopulateScenesMenu(scenesMenu);
+        menu.Items.Add(scenesMenu);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Remote control", null, (_, _) => RemoteControlForm.ShowRemote(_server));
+        var startupItem = new ToolStripMenuItem("Start with Windows") { CheckOnClick = false, Checked = StartupManager.IsEnabled() };
+        startupItem.Click += (_, _) =>
+        {
+            try
+            {
+                StartupManager.SetEnabled(!startupItem.Checked);
+                startupItem.Checked = StartupManager.IsEnabled();
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                MessageBox.Show($"Could not update the Windows startup setting.\n\n{ex.Message}", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        menu.Items.Add(startupItem);
         menu.Items.Add("About AT LiveOverlay", null, (_, _) => AboutForm.ShowAbout());
         menu.Items.Add("Open log folder", null, (_, _) => Log.OpenFolder());
         menu.Items.Add(new ToolStripSeparator());
@@ -129,6 +318,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     }
 
     public IReadOnlyList<OverlayForm> Forms => _forms;
+    public string ApiToken => _settings.ApiToken!;
 
     public void NewOverlay(string? initialUrl = null)
     {
@@ -190,6 +380,71 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         SettingsStore.Save(_settings);
     }
 
+    private void PopulateScenesMenu(ToolStripMenuItem scenesMenu)
+    {
+        scenesMenu.DropDownItems.Clear();
+        scenesMenu.DropDownItems.Add("Save current as scene...", null, (_, _) => SaveCurrentAsScene());
+
+        var names = ListScenes();
+        if (names.Count == 0) return;
+
+        scenesMenu.DropDownItems.Add(new ToolStripSeparator());
+        foreach (var name in names)
+            scenesMenu.DropDownItems.Add($"Load \"{name}\"", null, (_, _) => LoadScene(name));
+
+        scenesMenu.DropDownItems.Add(new ToolStripSeparator());
+        var manage = new ToolStripMenuItem("Delete a scene");
+        foreach (var name in names)
+            manage.DropDownItems.Add(name, null, (_, _) => DeleteScene(name));
+        scenesMenu.DropDownItems.Add(manage);
+    }
+
+    private void SaveCurrentAsScene()
+    {
+        var name = NamePrompt.Show("AT LiveOverlay - Save Scene", "Scene name:", "");
+        if (string.IsNullOrWhiteSpace(name)) return;
+        SaveSceneAs(name.Trim());
+    }
+
+    public void SaveSceneAs(string name)
+    {
+        SaveSettings();
+        var snapshot = _settings.Overlays.Select(CloneOverlay).ToList();
+        var existing = _settings.Scenes.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null) existing.Overlays = snapshot;
+        else _settings.Scenes.Add(new Scene { Name = name, Overlays = snapshot });
+        SettingsStore.Save(_settings);
+    }
+
+    public bool LoadScene(string name)
+    {
+        var scene = _settings.Scenes.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (scene is null) return false;
+
+        foreach (var form in _forms.ToList()) form.ClosePermanently();
+        _settings.Overlays = scene.Overlays.Select(CloneOverlay).ToList();
+        if (_settings.Overlays.Count > 0)
+            _settings.NextId = Math.Max(_settings.NextId, _settings.Overlays.Max(o => o.Id) + 1);
+        SettingsStore.Save(_settings);
+
+        foreach (var overlay in _settings.Overlays.Where(o => o.Enabled).ToList())
+            CreateOverlay(overlay, false);
+        return true;
+    }
+
+    public bool DeleteScene(string name)
+    {
+        var removed = _settings.Scenes.RemoveAll(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (removed > 0) SettingsStore.Save(_settings);
+        return removed > 0;
+    }
+
+    public List<string> ListScenes() =>
+        _settings.Scenes.Select(s => s.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+
+    private static OverlaySettings CloneOverlay(OverlaySettings source) =>
+        JsonSerializer.Deserialize<OverlaySettings>(JsonSerializer.Serialize(source))!;
+
     private void CloseAllOverlays()
     {
         foreach (var form in _forms.ToList()) RemoveOverlay(form);
@@ -198,6 +453,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     public void ExitApplication()
     {
         _server?.Dispose();
+        _hotkeys?.Dispose();
         foreach (var form in _forms.ToList()) form.CloseForExit();
         SaveSettings();
         if (_tray is not null) _tray.Visible = false;
@@ -218,6 +474,7 @@ internal sealed class OverlayForm : Form
     private readonly WebView2 _webView;
     private readonly FlowLayoutPanel _toolbar;
     private readonly Button _moveButton;
+    private Button _positionButton = null!;
     private readonly NumericUpDown _refreshBox;
     private readonly System.Windows.Forms.Timer _refreshTimer;
     private readonly System.Windows.Forms.Timer _hideToolbarTimer;
@@ -263,9 +520,21 @@ internal sealed class OverlayForm : Form
             Visible = false
         };
 
+        var idLabel = new Label
+        {
+            Text = $"#{Model.Id} {Model.Name}",
+            AutoSize = true,
+            ForeColor = Color.FromArgb(238, 124, 25),
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(4, 9, 12, 0)
+        };
+        _toolbar.Controls.Add(idLabel);
+
         _moveButton = AddButton("Move", ToggleMoveMode);
         AddButton("Reload", ReloadPage);
         AddButton("URL", ChangeUrl);
+        _positionButton = AddButton("Position", ShowPositionMenu);
 
         var refreshLabel = new Label
         {
@@ -453,12 +722,35 @@ internal sealed class OverlayForm : Form
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            _webView.CoreWebView2.ProcessFailed -= OnWebViewProcessFailed;
+            _webView.CoreWebView2.ProcessFailed += OnWebViewProcessFailed;
             _webView.Source = NormalizeUri(Model.Url);
         }
         catch (Exception ex)
         {
             Log.Exception(ex);
             ShowWebView2Error();
+        }
+    }
+
+    // WebView2's render or GPU process can crash independently of the host app during a long-running
+    // show. Left unhandled, the overlay just goes blank until someone notices. Recover automatically:
+    // a full browser-process loss needs the control re-initialized, anything else just needs a reload.
+    private async void OnWebViewProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
+    {
+        Log.Info($"Overlay #{Model.Id}: WebView2 process failed (kind={e.ProcessFailedKind}, reason={e.Reason}, exitCode={e.ExitCode}). Recovering.");
+        if (_exiting || IsDisposed) return;
+
+        try
+        {
+            if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+                await InitializeWebViewAsync();
+            else
+                _webView.Reload();
+        }
+        catch (Exception ex)
+        {
+            Log.Exception(ex);
         }
     }
 
@@ -602,6 +894,49 @@ internal sealed class OverlayForm : Form
             ScheduleToolbarHide();
             Log.Info("URL dialog closed.");
         }
+    }
+
+    private enum ScreenAnchor { TopLeft, TopCenter, TopRight, Center, BottomLeft, BottomCenter, BottomRight }
+
+    private void ShowPositionMenu()
+    {
+        var menu = new ContextMenuStrip();
+        void AddAnchor(string text, ScreenAnchor anchor) =>
+            menu.Items.Add(text, null, (_, _) => SnapTo(anchor));
+        AddAnchor("Top left", ScreenAnchor.TopLeft);
+        AddAnchor("Top center", ScreenAnchor.TopCenter);
+        AddAnchor("Top right", ScreenAnchor.TopRight);
+        AddAnchor("Center", ScreenAnchor.Center);
+        AddAnchor("Bottom left", ScreenAnchor.BottomLeft);
+        AddAnchor("Bottom center", ScreenAnchor.BottomCenter);
+        AddAnchor("Bottom right", ScreenAnchor.BottomRight);
+        menu.Show(_positionButton, new Point(0, _positionButton.Height));
+    }
+
+    private void SnapTo(ScreenAnchor anchor)
+    {
+        var screen = Screen.FromControl(this);
+        var area = screen.WorkingArea;
+        const int margin = 20;
+        var width = Math.Min(Width, area.Width - margin * 2);
+        var height = Math.Min(Height, area.Height - margin * 2);
+
+        var x = anchor switch
+        {
+            ScreenAnchor.TopLeft or ScreenAnchor.BottomLeft => area.Left + margin,
+            ScreenAnchor.TopRight or ScreenAnchor.BottomRight => area.Right - width - margin,
+            _ => area.Left + (area.Width - width) / 2
+        };
+        var y = anchor switch
+        {
+            ScreenAnchor.TopLeft or ScreenAnchor.TopCenter or ScreenAnchor.TopRight => area.Top + margin,
+            ScreenAnchor.BottomLeft or ScreenAnchor.BottomCenter or ScreenAnchor.BottomRight => area.Bottom - height - margin,
+            _ => area.Top + (area.Height - height) / 2
+        };
+
+        Bounds = new Rectangle(x, y, width, height);
+        CaptureBounds();
+        _save();
     }
 
     public void ReloadPage()
@@ -1089,6 +1424,57 @@ internal static class UrlPrompt
     }
 }
 
+internal static class NamePrompt
+{
+    public static string? Show(string title, string label, string initial)
+    {
+        using var form = new Form
+        {
+            Text = title,
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ShowInTaskbar = false,
+            AutoScaleMode = AutoScaleMode.Dpi,
+            ClientSize = new Size(500, 190),
+            MinimumSize = new Size(500, 190),
+            Icon = Branding.LoadAppIcon(),
+            TopMost = true
+        };
+
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 1, RowCount = 4 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var labelControl = new Label { Text = label, AutoSize = true, Font = new Font("Segoe UI", 11), Margin = new Padding(0, 0, 0, 10) };
+        var box = new TextBox { Text = initial, Dock = DockStyle.Top, Font = new Font("Segoe UI", 11), Margin = new Padding(0, 0, 0, 16) };
+        var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true, MinimumSize = new Size(110, 36) };
+        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(110, 36) };
+        buttons.Controls.Add(cancel);
+        buttons.Controls.Add(ok);
+
+        layout.Controls.Add(labelControl, 0, 0);
+        layout.Controls.Add(box, 0, 1);
+        layout.Controls.Add(new Panel(), 0, 2);
+        layout.Controls.Add(buttons, 0, 3);
+        form.Controls.Add(layout);
+        form.AcceptButton = ok;
+        form.CancelButton = cancel;
+        form.Shown += (_, _) =>
+        {
+            form.BringToFront();
+            form.Activate();
+            box.SelectAll();
+            box.Focus();
+        };
+        return form.ShowDialog() == DialogResult.OK ? box.Text : null;
+    }
+}
+
 internal sealed class RemoteControlForm : Form
 {
     private RemoteControlForm(CompanionServer? server)
@@ -1104,6 +1490,7 @@ internal sealed class RemoteControlForm : Form
         var localIp = CompanionServer.GetPreferredLocalIp();
         var baseUrl = $"http://{localIp}:8765";
         var status = server?.IsRunning == true ? "Running" : "Not running";
+        var token = server?.ApiToken ?? "";
 
         var title = new Label { Text = "Remote control", AutoSize = true, Font = new Font("Segoe UI Semibold", 20), ForeColor = Color.FromArgb(238, 124, 25) };
         var info = new Label
@@ -1111,14 +1498,16 @@ internal sealed class RemoteControlForm : Form
             AutoSize = true,
             MaximumSize = new Size(690, 0),
             Text = $"Bitfocus Companion can control this computer using HTTP GET requests.\n\n" +
-                   $"Status: {status}\nBase URL: {baseUrl}\n\n" +
-                   "/status\n" +
-                   "/overlay/1/show\n/overlay/1/hide\n/overlay/1/reload\n" +
-                   "/overlay/1/edit\n/overlay/1/live\n/overlay/1/lock\n/overlay/1/unlock\n" +
-                   "/overlay/1/close\n/overlay/1/seturl?url=http%3A%2F%2Fserver%2Ftimer\n" +
-                   "/overlay/1/opacity?value=75\n/overlay/1/refresh?seconds=30\n" +
-                   "/overlay/create?url=http%3A%2F%2Fserver%2Ftimer\n" +
-                   "/overlay/all/show\n/overlay/all/hide\n/overlay/all/reload\n\n" +
+                   $"Status: {status}\nBase URL: {baseUrl}\nAPI token: {token}\n\n" +
+                   "Every request must include this token, e.g.\n" +
+                   $"/status?token={token}\n" +
+                   $"/overlay/1/show?token={token}\n/overlay/1/hide?token={token}\n/overlay/1/reload?token={token}\n" +
+                   $"/overlay/1/edit?token={token}\n/overlay/1/live?token={token}\n/overlay/1/lock?token={token}\n/overlay/1/unlock?token={token}\n" +
+                   $"/overlay/1/close?token={token}\n/overlay/1/seturl?token={token}&url=http%3A%2F%2Fserver%2Ftimer\n" +
+                   $"/overlay/1/opacity?token={token}&value=75\n/overlay/1/refresh?token={token}&seconds=30\n" +
+                   $"/overlay/create?token={token}&url=http%3A%2F%2Fserver%2Ftimer\n" +
+                   $"/overlay/all/show?token={token}\n/overlay/all/hide?token={token}\n/overlay/all/reload?token={token}\n\n" +
+                   $"/scene/list?token={token}\n/scene/load?token={token}&name=MyScene\n\n" +
                    "Allow TCP port 8765 through Windows Firewall for control from another device."
         };
 
@@ -1126,10 +1515,12 @@ internal sealed class RemoteControlForm : Form
         firewall.Click += (_, _) => EnableFirewall();
         var copy = new Button { Text = "Copy base URL", AutoSize = true, MinimumSize = new Size(150, 42) };
         copy.Click += (_, _) => { try { Clipboard.SetText(baseUrl); } catch { } };
+        var copyToken = new Button { Text = "Copy API token", AutoSize = true, MinimumSize = new Size(150, 42) };
+        copyToken.Click += (_, _) => { try { Clipboard.SetText(token); } catch { } };
         var close = new Button { Text = "Close", DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(120, 42) };
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = true };
-        buttons.Controls.Add(close); buttons.Controls.Add(copy); buttons.Controls.Add(firewall);
+        buttons.Controls.Add(close); buttons.Controls.Add(copyToken); buttons.Controls.Add(copy); buttons.Controls.Add(firewall);
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28), ColumnCount = 1, RowCount = 3 };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -1175,6 +1566,7 @@ internal sealed class CompanionServer : IDisposable
     }
 
     public bool IsRunning => _isRunning;
+    public string ApiToken => _app.ApiToken;
 
     public static string GetPreferredLocalIp()
     {
@@ -1255,6 +1647,13 @@ internal sealed class CompanionServer : IDisposable
                 var contentType = "text/plain; charset=utf-8";
                 string response = "OK";
 
+                if (!query.TryGetValue("token", out var suppliedToken) ||
+                    !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(suppliedToken), Encoding.UTF8.GetBytes(_app.ApiToken)))
+                {
+                    await WriteResponse(stream, 401, "text/plain", "Missing or invalid token.");
+                    return;
+                }
+
                 if (path == "status")
                 {
                     response = JsonSerializer.Serialize(new
@@ -1279,6 +1678,29 @@ internal sealed class CompanionServer : IDisposable
                 {
                     query.TryGetValue("url", out var url);
                     RunUi(() => _app.NewOverlay(url));
+                }
+                else if (path == "scene/list")
+                {
+                    response = JsonSerializer.Serialize(_app.ListScenes());
+                    contentType = "application/json; charset=utf-8";
+                }
+                else if (path == "scene/load")
+                {
+                    if (query.TryGetValue("name", out var sceneName) && !string.IsNullOrWhiteSpace(sceneName))
+                    {
+                        var loaded = false;
+                        RunUiBlocking(() => loaded = _app.LoadScene(sceneName));
+                        if (!loaded)
+                        {
+                            statusCode = 404;
+                            response = "Scene not found.";
+                        }
+                    }
+                    else
+                    {
+                        statusCode = 400;
+                        response = "Missing 'name' parameter.";
+                    }
                 }
                 else if (parts.Length >= 3 && parts[0] == "overlay" && parts[1] == "all")
                 {
@@ -1381,6 +1803,15 @@ internal sealed class CompanionServer : IDisposable
         else action();
     }
 
+    // Some routes (e.g. scene load) need the UI-thread work to finish before the HTTP response
+    // is written, so the caller can report success/failure accurately.
+    private static void RunUiBlocking(Action action)
+    {
+        var form = Application.OpenForms.Cast<Form>().FirstOrDefault();
+        if (form is not null && form.InvokeRequired) form.Invoke(action);
+        else action();
+    }
+
     public void Dispose()
     {
         _cts.Cancel();
@@ -1390,11 +1821,65 @@ internal sealed class CompanionServer : IDisposable
     }
 }
 
+internal sealed class HotkeyManager : NativeWindow, IDisposable
+{
+    public const uint ModAlt = 0x1;
+    public const uint ModControl = 0x2;
+    public const uint ModShift = 0x4;
+
+    private const int WmHotkey = 0x0312;
+    private readonly Dictionary<int, Action> _handlers = new();
+    private int _nextId = 1;
+
+    public HotkeyManager()
+    {
+        CreateHandle(new CreateParams());
+    }
+
+    public bool Register(Keys key, uint modifiers, Action action)
+    {
+        var id = _nextId++;
+        if (!RegisterHotKey(Handle, id, modifiers, (uint)key)) return false;
+        _handlers[id] = action;
+        return true;
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WmHotkey && _handlers.TryGetValue(m.WParam.ToInt32(), out var action))
+        {
+            try { action(); } catch (Exception ex) { Log.Exception(ex); }
+        }
+        base.WndProc(ref m);
+    }
+
+    public void Dispose()
+    {
+        foreach (var id in _handlers.Keys) UnregisterHotKey(Handle, id);
+        _handlers.Clear();
+        DestroyHandle();
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll")]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+}
+
 internal sealed class AppSettings
 {
     public int SchemaVersion { get; set; }
     public int NextId { get; set; } = 1;
     public string? LastUrl { get; set; }
+    public string? ApiToken { get; set; }
+    public List<OverlaySettings> Overlays { get; set; } = new();
+    public List<Scene> Scenes { get; set; } = new();
+}
+
+internal sealed class Scene
+{
+    public string Name { get; set; } = "";
     public List<OverlaySettings> Overlays { get; set; } = new();
 }
 
@@ -1420,16 +1905,32 @@ internal static class SettingsStore
 
     public static AppSettings Load()
     {
+        AppSettings settings;
         try
         {
-            if (!File.Exists(FilePath)) return new AppSettings();
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
+            settings = File.Exists(FilePath)
+                ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings()
+                : new AppSettings();
         }
         catch (Exception ex)
         {
             Log.Exception(ex);
-            return new AppSettings();
+            settings = new AppSettings();
         }
+
+        if (string.IsNullOrWhiteSpace(settings.ApiToken))
+        {
+            settings.ApiToken = GenerateToken();
+            Save(settings);
+        }
+
+        return settings;
+    }
+
+    private static string GenerateToken()
+    {
+        var bytes = RandomNumberGenerator.GetBytes(24);
+        return Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');
     }
 
     public static void Save(AppSettings settings)
@@ -1440,6 +1941,26 @@ internal static class SettingsStore
             File.WriteAllText(FilePath, JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { Log.Exception(ex); }
+    }
+}
+
+internal static class StartupManager
+{
+    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string ValueName = "AT LiveOverlay";
+
+    public static bool IsEnabled()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
+        var value = key?.GetValue(ValueName) as string;
+        return value is not null && string.Equals(value.Trim('"'), Application.ExecutablePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static void SetEnabled(bool enabled)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true) ?? Registry.CurrentUser.CreateSubKey(RunKeyPath);
+        if (enabled) key.SetValue(ValueName, $"\"{Application.ExecutablePath}\"");
+        else key.DeleteValue(ValueName, throwOnMissingValue: false);
     }
 }
 
@@ -1547,6 +2068,7 @@ internal static class Log
 {
     private static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AT LiveOverlay", "Logs");
     private static readonly object Sync = new();
+    private const long MaxFileBytes = 5 * 1024 * 1024;
 
     public static void Info(string message)
     {
@@ -1555,7 +2077,9 @@ internal static class Log
             lock (Sync)
             {
                 Directory.CreateDirectory(Folder);
-                File.AppendAllText(Path.Combine(Folder, "app.log"), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {message}{Environment.NewLine}");
+                var path = Path.Combine(Folder, "app.log");
+                RotateIfTooLarge(path);
+                File.AppendAllText(path, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {message}{Environment.NewLine}");
             }
         }
         catch { }
@@ -1578,9 +2102,21 @@ internal static class Log
             lock (Sync)
             {
                 Directory.CreateDirectory(Folder);
-                File.AppendAllText(Path.Combine(Folder, "crash.log"), $"{Environment.NewLine}============================================================{Environment.NewLine}{DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}{ex}{Environment.NewLine}");
+                var path = Path.Combine(Folder, "crash.log");
+                RotateIfTooLarge(path);
+                File.AppendAllText(path, $"{Environment.NewLine}============================================================{Environment.NewLine}{DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}{ex}{Environment.NewLine}");
             }
         }
         catch { }
+    }
+
+    // Keeps at most one rotated backup per log file so the Logs folder cannot grow without bound
+    // on machines left running for months at a venue.
+    private static void RotateIfTooLarge(string path)
+    {
+        if (!File.Exists(path) || new FileInfo(path).Length < MaxFileBytes) return;
+        var rotatedPath = path + ".old";
+        File.Delete(rotatedPath);
+        File.Move(path, rotatedPath);
     }
 }

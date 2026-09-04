@@ -8,6 +8,7 @@ import {
 class ATLiveOverlayInstance extends InstanceBase {
   async init(config) {
     this.config = config
+    this.statusData = null
     this.updateStatus(InstanceStatus.Connecting)
     this.initActions()
     this.initFeedbacks()
@@ -45,6 +46,13 @@ class ATLiveOverlayInstance extends InstanceBase {
         min: 1,
         max: 65535,
       },
+      {
+        type: 'secret-text',
+        id: 'token',
+        label: 'API token (from AT LiveOverlay > Remote control)',
+        width: 12,
+        default: '',
+      },
     ]
   }
 
@@ -53,7 +61,9 @@ class ATLiveOverlayInstance extends InstanceBase {
   }
 
   async request(path) {
-    const response = await fetch(`${this.baseUrl()}${path}`, { method: 'GET' })
+    const separator = path.includes('?') ? '&' : '?'
+    const url = `${this.baseUrl()}${path}${separator}token=${encodeURIComponent(this.config.token || '')}`
+    const response = await fetch(url, { method: 'GET' })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     return response
   }
@@ -64,11 +74,39 @@ class ATLiveOverlayInstance extends InstanceBase {
       const data = await response.json()
       this.statusData = data
       this.updateStatus(InstanceStatus.Ok)
-      this.setVariableValues({
+
+      const overlays = Array.isArray(data.overlays) ? data.overlays : []
+      const definitions = [
+        { variableId: 'version', name: 'AT LiveOverlay version' },
+        { variableId: 'build', name: 'AT LiveOverlay build' },
+        { variableId: 'overlay_count', name: 'Overlay count' },
+      ]
+      const values = {
         version: data.version || '',
         build: data.build || '',
-        overlay_count: Array.isArray(data.overlays) ? data.overlays.length : 0,
-      })
+        overlay_count: overlays.length,
+      }
+
+      for (const overlay of overlays) {
+        const id = overlay.Id
+        definitions.push(
+          { variableId: `overlay_${id}_name`, name: `Overlay ${id} name` },
+          { variableId: `overlay_${id}_url`, name: `Overlay ${id} URL` },
+          { variableId: `overlay_${id}_visible`, name: `Overlay ${id} visible` },
+          { variableId: `overlay_${id}_locked`, name: `Overlay ${id} locked` },
+          { variableId: `overlay_${id}_opacity`, name: `Overlay ${id} opacity %` },
+          { variableId: `overlay_${id}_refresh`, name: `Overlay ${id} refresh seconds` },
+        )
+        values[`overlay_${id}_name`] = overlay.Name || ''
+        values[`overlay_${id}_url`] = overlay.Url || ''
+        values[`overlay_${id}_visible`] = overlay.visible ? 'yes' : 'no'
+        values[`overlay_${id}_locked`] = overlay.locked ? 'yes' : 'no'
+        values[`overlay_${id}_opacity`] = overlay.opacity ?? ''
+        values[`overlay_${id}_refresh`] = overlay.refreshSeconds ?? ''
+      }
+
+      this.setVariableDefinitions(definitions)
+      this.setVariableValues(values)
       this.checkFeedbacks()
     } catch (error) {
       this.updateStatus(InstanceStatus.ConnectionFailure, error.message)
@@ -124,6 +162,14 @@ class ATLiveOverlayInstance extends InstanceBase {
       show_all: { name: 'Show all overlays', options: [], callback: async () => this.request('/overlay/all/show') },
       hide_all: { name: 'Hide all overlays', options: [], callback: async () => this.request('/overlay/all/hide') },
       reload_all: { name: 'Reload all overlays', options: [], callback: async () => this.request('/overlay/all/reload') },
+      load_scene: {
+        name: 'Load scene',
+        options: [{ type: 'textinput', id: 'name', label: 'Scene name', default: '', useVariables: true }],
+        callback: async (event) => {
+          const name = await this.parseVariablesInString(event.options.name)
+          return this.request(`/scene/load?name=${encodeURIComponent(name)}`)
+        },
+      },
     })
   }
 
@@ -142,6 +188,13 @@ class ATLiveOverlayInstance extends InstanceBase {
         defaultStyle: { bgcolor: 0xee7c19, color: 0x000000 },
         options: [this.overlayOption()],
         callback: (feedback) => Boolean(this.statusData?.overlays?.find((o) => o.Id === feedback.options.id)?.locked),
+      },
+      exists: {
+        name: 'Overlay exists',
+        type: 'boolean',
+        defaultStyle: { bgcolor: 0x333333, color: 0xffffff },
+        options: [this.overlayOption()],
+        callback: (feedback) => Boolean(this.statusData?.overlays?.find((o) => o.Id === feedback.options.id)),
       },
     })
   }

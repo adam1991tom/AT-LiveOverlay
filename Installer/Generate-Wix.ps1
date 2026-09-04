@@ -32,7 +32,7 @@ foreach($file in $files) {
 $sb = New-Object Text.StringBuilder
 [void]$sb.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
 [void]$sb.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui" xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall">')
-[void]$sb.AppendLine('  <Package Name="AT LiveOverlay" Manufacturer="AT" Version="3.3.1" UpgradeCode="F4D7C037-96CC-4EF5-B75A-5438F62FD8F7" Scope="perMachine" InstallerVersion="500">')
+[void]$sb.AppendLine('  <Package Name="AT LiveOverlay" Manufacturer="AT" Version="4.0.0" UpgradeCode="F4D7C037-96CC-4EF5-B75A-5438F62FD8F7" Scope="perMachine" InstallerVersion="500">')
 [void]$sb.AppendLine('    <Property Id="ARPPRODUCTICON" Value="AppIcon" />')
 [void]$sb.AppendLine('    <Property Id="ARPCOMMENTS" Value="Professional always-on-top webpage overlays with Bitfocus Companion control." />')
 [void]$sb.AppendLine('    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />')

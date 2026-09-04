@@ -10,7 +10,7 @@ $ToolsDir = Join-Path $Root '.tools'
 $WixExe = Join-Path $ToolsDir 'wix.exe'
 $Project = Join-Path $Root 'ATLiveOverlay\ATLiveOverlay.csproj'
 $NugetConfig = Join-Path $Root 'NuGet.Config'
-$MsiPath = Join-Path $FinalDir 'AT-LiveOverlay-v3.3.1-Setup.msi'
+$MsiPath = Join-Path $FinalDir 'AT-LiveOverlay-v4.0.0-Setup.msi'
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 if (Test-Path $LogFile) { Remove-Item $LogFile -Force }
@@ -35,7 +35,7 @@ function Invoke-Native {
 try {
     Clear-Host
     Write-Host '============================================================'
-    Write-Host '         AT LIVEOVERLAY v3.3.1 - FINAL MSI BUILDER'
+    Write-Host '         AT LIVEOVERLAY v4.0.0 - FINAL MSI BUILDER'
     Write-Host '============================================================'
     Write-Host "Build log: $LogFile"
 
@@ -61,16 +61,20 @@ try {
         Select-Object -Unique |
         Select-Object -First 1
 
-    if (-not $Dotnet) {
+    function Has8Sdk([string]$DotnetPath) {
+        if (-not $DotnetPath -or -not (Test-Path $DotnetPath)) { return $false }
+        $sdks = & $DotnetPath --list-sdks 2>$null
+        return ($LASTEXITCODE -eq 0) -and ($null -ne ($sdks | Select-String '^8\.'))
+    }
+
+    if (-not (Has8Sdk $Dotnet)) {
         Write-Host '.NET 8 SDK was not found. Installing with Winget...' -ForegroundColor Yellow
         $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
         if (-not $winget) { throw 'Winget is unavailable. Install the .NET 8 SDK manually, then run this builder again.' }
         Invoke-Native $winget.Source 'install' '--id' 'Microsoft.DotNet.SDK.8' '--exact' '--source' 'winget' '--accept-package-agreements' '--accept-source-agreements'
         $Dotnet = Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'
     }
-    if (-not (Test-Path $Dotnet)) { throw 'dotnet.exe could not be located after installation.' }
-    $sdks = & $Dotnet --list-sdks
-    if ($LASTEXITCODE -ne 0 -or -not ($sdks | Select-String '^8\.')) { throw 'The .NET 8 SDK is not installed. A runtime alone is not enough.' }
+    if (-not (Has8Sdk $Dotnet)) { throw 'The .NET 8 SDK is not installed. A runtime alone is not enough.' }
     Write-Host "Found: $Dotnet" -ForegroundColor Green
 
     Write-Step '[2/6] Generating version and build metadata...'
@@ -88,11 +92,11 @@ try {
     Copy-Item (Join-Path $Root 'ATLiveOverlay\app.ico') (Join-Path $PublishDir 'app.ico') -Force
     Copy-Item (Join-Path $Root 'ATLiveOverlay\app.png') (Join-Path $PublishDir 'app.png') -Force
 
-    Write-Step '[3/6] Downloading the official WebView2 bootstrapper...'
+    Write-Step '[3/6] Downloading the WebView2 Runtime installers...'
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Download-WebView2.ps1') -OutputDir $PublishDir
+    if ($LASTEXITCODE -ne 0) { throw 'WebView2 Runtime download failed.' }
     $bootstrapper = Join-Path $PublishDir 'MicrosoftEdgeWebView2Setup.exe'
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -UseBasicParsing -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapper
-    if (-not (Test-Path $bootstrapper) -or (Get-Item $bootstrapper).Length -lt 100000) {
+    if ((Test-Path $bootstrapper) -and (Get-Item $bootstrapper).Length -lt 100000) {
         throw 'The Microsoft WebView2 bootstrapper download was incomplete.'
     }
 
@@ -123,12 +127,12 @@ try {
     Set-Content -LiteralPath ($MsiPath + '.sha256') -Value ($Hash + '  ' + [IO.Path]::GetFileName($MsiPath)) -Encoding ASCII
     $ReleaseInfo = [ordered]@{
         product = 'AT LiveOverlay'
-        version = '3.3.1'
+        version = '4.0.0'
         installer = [IO.Path]::GetFileName($MsiPath)
         sha256 = $Hash
-        silentInstall = 'msiexec.exe /i "' + [IO.Path]::GetFileName($MsiPath) + '" /qn /norestart /L*v "%ProgramData%\AT LiveOverlay\Logs\install-3.3.1.log"'
+        silentInstall = 'msiexec.exe /i "' + [IO.Path]::GetFileName($MsiPath) + '" /qn /norestart /L*v "%ProgramData%\AT LiveOverlay\Logs\install-4.0.0.log"'
         detectionFile = 'C:\Program Files\AT LiveOverlay\ATLiveOverlay.exe'
-        minimumFileVersion = '3.3.1.0'
+        minimumFileVersion = '4.0.0.0'
         companionPort = 8765
         firewallProfile = 'Private'
     }
