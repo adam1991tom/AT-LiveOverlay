@@ -17,6 +17,7 @@ function Rel([string]$base,[string]$full) {
   if (-not $f.StartsWith($b,[StringComparison]::OrdinalIgnoreCase)) { throw "Path is outside publish directory: $full" }
   return $f.Substring($b.Length)
 }
+$exeFileId = SafeId 'F_' 'ATLiveOverlay.exe'
 $files = Get-ChildItem -LiteralPath $PublishDir -File -Recurse | Sort-Object FullName
 $dirs = @{}; $dirs[''] = 'INSTALLFOLDER'
 foreach($file in $files) {
@@ -31,11 +32,14 @@ foreach($file in $files) {
 }
 $sb = New-Object Text.StringBuilder
 [void]$sb.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
-[void]$sb.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui" xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall">')
+[void]$sb.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui" xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">')
 [void]$sb.AppendLine('  <Package Name="AT LiveOverlay" Manufacturer="AT" Version="4.0.0" UpgradeCode="F4D7C037-96CC-4EF5-B75A-5438F62FD8F7" Scope="perMachine" InstallerVersion="500">')
 [void]$sb.AppendLine('    <Property Id="ARPPRODUCTICON" Value="AppIcon" />')
 [void]$sb.AppendLine('    <Property Id="ARPCOMMENTS" Value="Professional always-on-top webpage overlays with Bitfocus Companion control." />')
 [void]$sb.AppendLine('    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />')
+[void]$sb.AppendLine('    <UI>')
+[void]$sb.AppendLine('      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="10" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />')
+[void]$sb.AppendLine('    </UI>')
 [void]$sb.AppendLine('    <WixVariable Id="WixUIBannerBmp" Value="'+(Esc (Join-Path $PSScriptRoot 'Assets\banner.bmp'))+'" />')
 [void]$sb.AppendLine('    <WixVariable Id="WixUIDialogBmp" Value="'+(Esc (Join-Path $PSScriptRoot 'Assets\dialog.bmp'))+'" />')
 [void]$sb.AppendLine('    <WixVariable Id="WixUILicenseRtf" Value="'+(Esc (Join-Path $PSScriptRoot 'License.rtf'))+'" />')
@@ -46,6 +50,9 @@ $sb = New-Object Text.StringBuilder
 [void]$sb.AppendLine('    <!-- Stable upgrade handling: one immediate close action only. -->')
 [void]$sb.AppendLine('    <!-- Deferred taskkill and cleanup actions were removed because they caused MSI error 2762. -->')
 [void]$sb.AppendLine('    <CustomAction Id="CloseATLiveOverlay" Directory="SystemFolder" ExeCommand="cmd.exe /D /C taskkill /F /T /IM ATLiveOverlay.exe &gt;nul 2&gt;&amp;1" Execute="immediate" Impersonate="yes" Return="ignore" />')
+[void]$sb.AppendLine('    <!-- Powers the ExitDialog "Launch AT LiveOverlay" checkbox; asyncNoWait because the app keeps running as a tray process. -->')
+[void]$sb.AppendLine('    <Property Id="WixShellExecTarget" Value="[#'+$exeFileId+']" />')
+[void]$sb.AppendLine('    <CustomAction Id="LaunchApplication" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixShellExec" Impersonate="yes" Return="ignore" />')
 [void]$sb.AppendLine('    <InstallExecuteSequence>')
 [void]$sb.AppendLine('      <Custom Action="CloseATLiveOverlay" Before="InstallValidate" Condition="WIX_UPGRADE_DETECTED OR REMOVE=&quot;ALL&quot;" />')
 [void]$sb.AppendLine('    </InstallExecuteSequence>')

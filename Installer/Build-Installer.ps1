@@ -110,6 +110,7 @@ try {
     # Ignore the return code when already installed; the actual MSI build validates it.
     & $WixExe extension add 'WixToolset.UI.wixext/4.0.6'
     & $WixExe extension add 'WixToolset.Firewall.wixext/4.0.6'
+    & $WixExe extension add 'WixToolset.Util.wixext/4.0.6'
 
     Write-Step '[5/6] Generating the MSI package definition...'
     $Wxs = Join-Path $PSScriptRoot 'ATLiveOverlay.wxs'
@@ -119,7 +120,7 @@ try {
     Write-Step '[6/6] Building the one-file MSI installer...'
     if (Test-Path $FinalDir) { Remove-Item $FinalDir -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $FinalDir | Out-Null
-    Invoke-Native $WixExe 'build' $Wxs '-arch' 'x64' '-ext' 'WixToolset.UI.wixext' '-ext' 'WixToolset.Firewall.wixext' '-o' $MsiPath
+    Invoke-Native $WixExe 'build' $Wxs '-arch' 'x64' '-ext' 'WixToolset.UI.wixext' '-ext' 'WixToolset.Firewall.wixext' '-ext' 'WixToolset.Util.wixext' '-o' $MsiPath
     if (-not (Test-Path $MsiPath)) { throw 'WiX completed without creating the MSI.' }
 
     Write-Step '[6/6] Creating deployment metadata and checksum...'

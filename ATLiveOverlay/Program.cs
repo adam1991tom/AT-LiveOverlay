@@ -66,7 +66,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             if (latest is null || current is null || latest <= current)
             {
                 if (manual)
-                    MessageBox.Show("You already have the latest version of AT LiveOverlay.", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show($"You already have the latest version of AT LiveOverlay (v{BuildInfo.Version}).", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
