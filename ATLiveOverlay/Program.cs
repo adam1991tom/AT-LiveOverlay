@@ -341,6 +341,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             }
         };
         menu.Items.Add(startupItem);
+        menu.Items.Add("Backup settings...", null, (_, _) => BackupSettings());
+        menu.Items.Add("Restore settings...", null, (_, _) => RestoreSettings());
         menu.Items.Add("About AT LiveOverlay", null, (_, _) => AboutForm.ShowAbout());
         menu.Items.Add("Open log folder", null, (_, _) => Log.OpenFolder());
         menu.Items.Add(new ToolStripSeparator());
@@ -373,12 +375,15 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         return id;
     }
 
+    public string? ActiveSceneName { get; private set; }
+
     public void NewOverlay(string? initialUrl = null)
     {
         var previous = _settings.LastUrl ?? "http://10.100.70.101:4007/timer";
         var url = initialUrl ?? UrlPrompt.Show(previous);
         if (string.IsNullOrWhiteSpace(url)) return;
 
+        ActiveSceneName = null;
         var id = NextAvailableId();
         var model = new OverlaySettings
         {
@@ -419,6 +424,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
 
     private void RemoveOverlay(OverlayForm form)
     {
+        ActiveSceneName = null;
         form.Model.Enabled = false;
         _settings.Overlays.RemoveAll(x => x.Id == form.Model.Id);
         SaveSettings();
@@ -480,13 +486,18 @@ internal sealed class OverlayApplicationContext : ApplicationContext
 
         foreach (var overlay in _settings.Overlays.Where(o => o.Enabled).ToList())
             CreateOverlay(overlay, false);
+        ActiveSceneName = scene.Name;
         return true;
     }
 
     public bool DeleteScene(string name)
     {
         var removed = _settings.Scenes.RemoveAll(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
-        if (removed > 0) SettingsStore.Save(_settings);
+        if (removed > 0)
+        {
+            SettingsStore.Save(_settings);
+            if (string.Equals(ActiveSceneName, name, StringComparison.OrdinalIgnoreCase)) ActiveSceneName = null;
+        }
         return removed > 0;
     }
 
@@ -495,6 +506,70 @@ internal sealed class OverlayApplicationContext : ApplicationContext
 
     private static OverlaySettings CloneOverlay(OverlaySettings source) =>
         JsonSerializer.Deserialize<OverlaySettings>(JsonSerializer.Serialize(source))!;
+
+    private void BackupSettings()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Backup AT LiveOverlay settings",
+            Filter = "AT LiveOverlay backup (*.json)|*.json",
+            FileName = $"AT LiveOverlay Backup {DateTime.Now:yyyy-MM-dd}.json"
+        };
+        if (dialog.ShowDialog() != DialogResult.OK) return;
+
+        try
+        {
+            SaveSettings();
+            SettingsStore.ExportTo(dialog.FileName);
+            MessageBox.Show("Settings backed up successfully.", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            Log.Exception(ex);
+            MessageBox.Show($"Could not back up settings.\n\n{ex.Message}", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void RestoreSettings()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Restore AT LiveOverlay settings",
+            Filter = "AT LiveOverlay backup (*.json)|*.json"
+        };
+        if (dialog.ShowDialog() != DialogResult.OK) return;
+
+        var confirm = MessageBox.Show(
+            "Restoring will close all current overlays and replace them with the backup. Continue?",
+            "AT LiveOverlay - Restore settings",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+
+        try
+        {
+            var loaded = SettingsStore.LoadFrom(dialog.FileName);
+            foreach (var form in _forms.ToList()) form.ClosePermanently();
+            ActiveSceneName = null;
+
+            _settings.SchemaVersion = loaded.SchemaVersion;
+            _settings.LastUrl = loaded.LastUrl;
+            if (!string.IsNullOrWhiteSpace(loaded.ApiToken)) _settings.ApiToken = loaded.ApiToken;
+            _settings.Overlays = loaded.Overlays;
+            _settings.Scenes = loaded.Scenes;
+            SettingsStore.Save(_settings);
+
+            foreach (var overlay in _settings.Overlays.Where(o => o.Enabled).ToList())
+                CreateOverlay(overlay, false);
+
+            MessageBox.Show("Settings restored successfully.", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            Log.Exception(ex);
+            MessageBox.Show($"Could not restore settings.\n\n{ex.Message}", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
 
     private void CloseAllOverlays()
     {
@@ -530,6 +605,8 @@ internal sealed class OverlayForm : Form
     private readonly System.Windows.Forms.Timer _refreshTimer;
     private readonly System.Windows.Forms.Timer _hideToolbarTimer;
     private readonly System.Windows.Forms.Timer _hoverWatchTimer;
+    private readonly System.Windows.Forms.Timer _healthRetryTimer;
+    private bool _lastNavigationFailed;
     private readonly NumericUpDown _opacityBox;
     private bool _moving;
     private bool _controlsPinned;
@@ -668,6 +745,14 @@ internal sealed class OverlayForm : Form
         _refreshTimer.Tick += (_, _) => ReloadPage();
         ConfigureRefreshTimer();
 
+        _healthRetryTimer = new System.Windows.Forms.Timer { Interval = 5000 };
+        _healthRetryTimer.Tick += (_, _) =>
+        {
+            _healthRetryTimer.Stop();
+            if (_exiting) return;
+            try { _webView.CoreWebView2?.Reload(); } catch (Exception ex) { Log.Exception(ex); }
+        };
+
         _hideToolbarTimer = new System.Windows.Forms.Timer { Interval = 150 };
         _hideToolbarTimer.Tick += (_, _) =>
         {
@@ -775,6 +860,8 @@ internal sealed class OverlayForm : Form
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
             _webView.CoreWebView2.ProcessFailed -= OnWebViewProcessFailed;
             _webView.CoreWebView2.ProcessFailed += OnWebViewProcessFailed;
+            _webView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
+            _webView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
             _webView.Source = NormalizeUri(Model.Url);
         }
         catch (Exception ex)
@@ -782,6 +869,27 @@ internal sealed class OverlayForm : Form
             Log.Exception(ex);
             ShowWebView2Error();
         }
+    }
+
+    // Catches a target page that's unreachable (server down, network hiccup) rather than just a
+    // WebView2 process crash - without this, the overlay silently sits on a browser error page
+    // until someone notices during a show. Keeps retrying every 5s until it succeeds.
+    private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+    {
+        if (_exiting || IsDisposed) return;
+
+        if (e.IsSuccess)
+        {
+            if (_lastNavigationFailed) Log.Info($"Overlay #{Model.Id}: page recovered ({Model.Url}).");
+            _lastNavigationFailed = false;
+            _healthRetryTimer.Stop();
+            return;
+        }
+
+        _lastNavigationFailed = true;
+        Log.Info($"Overlay #{Model.Id}: page failed to load ({e.WebErrorStatus}). Retrying in 5s.");
+        _healthRetryTimer.Stop();
+        _healthRetryTimer.Start();
     }
 
     // WebView2's render or GPU process can crash independently of the host app during a long-running
@@ -978,12 +1086,28 @@ internal sealed class OverlayForm : Form
         AddAnchor("Bottom left", ScreenAnchor.BottomLeft);
         AddAnchor("Bottom center", ScreenAnchor.BottomCenter);
         AddAnchor("Bottom right", ScreenAnchor.BottomRight);
+
+        if (Screen.AllScreens.Length > 1)
+        {
+            menu.Items.Add(new ToolStripSeparator());
+            var moveMenu = new ToolStripMenuItem("Move to monitor");
+            var screens = Screen.AllScreens;
+            for (var i = 0; i < screens.Length; i++)
+            {
+                var screen = screens[i];
+                var label = $"Monitor {i + 1}" + (screen.Primary ? " (Primary)" : "");
+                moveMenu.DropDownItems.Add(label, null, (_, _) => SnapTo(ScreenAnchor.Center, screen));
+            }
+            menu.Items.Add(moveMenu);
+        }
+
         menu.Show(_positionButton, new Point(0, _positionButton.Height));
     }
 
-    private void SnapTo(ScreenAnchor anchor)
+    private void SnapTo(ScreenAnchor anchor) => SnapTo(anchor, Screen.FromControl(this));
+
+    private void SnapTo(ScreenAnchor anchor, Screen screen)
     {
-        var screen = Screen.FromControl(this);
         var area = screen.WorkingArea;
         const int margin = 20;
         var width = Math.Min(Width, area.Width - margin * 2);
@@ -1778,6 +1902,7 @@ internal sealed class CompanionServer : IDisposable
                         build = BuildInfo.Build,
                         apiPort = _port,
                         running = IsRunning,
+                        activeScene = _app.ActiveSceneName,
                         overlays = _app.Forms.Select(f => new
                         {
                             f.Model.Id, f.Model.Name, f.Model.Url,
@@ -2055,6 +2180,14 @@ internal static class SettingsStore
             File.WriteAllText(FilePath, JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { Log.Exception(ex); }
+    }
+
+    public static void ExportTo(string destinationPath) => File.Copy(FilePath, destinationPath, overwrite: true);
+
+    public static AppSettings LoadFrom(string sourcePath)
+    {
+        return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(sourcePath))
+            ?? throw new InvalidOperationException("The backup file does not contain valid AT LiveOverlay settings.");
     }
 }
 

@@ -1,4 +1,4 @@
-AT LiveOverlay v4.0.3 Enterprise Builder
+AT LiveOverlay v4.1.0 Enterprise Builder
 
 1. Extract this entire ZIP to a normal local folder.
 2. Double-click BUILD-FINAL-INSTALLER.cmd.
@@ -6,7 +6,7 @@ AT LiveOverlay v4.0.3 Enterprise Builder
 4. Find the completed deployment package in FINAL-INSTALLER.
 
 The output includes:
-- AT-LiveOverlay-v4.0.3-Setup.msi
+- AT-LiveOverlay-v4.1.0-Setup.msi
 - SHA-256 checksum
 - release-info.json
 - Action1 / Intune / GPO / PDQ silent deployment scripts

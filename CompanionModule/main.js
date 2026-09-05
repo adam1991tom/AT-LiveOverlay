@@ -64,7 +64,11 @@ class ATLiveOverlayInstance extends InstanceBase {
     const separator = path.includes('?') ? '&' : '?'
     const url = `${this.baseUrl()}${path}${separator}token=${encodeURIComponent(this.config.token || '')}`
     const response = await fetch(url, { method: 'GET' })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`)
+      error.status = response.status
+      throw error
+    }
     return response
   }
 
@@ -80,11 +84,13 @@ class ATLiveOverlayInstance extends InstanceBase {
         { variableId: 'version', name: 'AT LiveOverlay version' },
         { variableId: 'build', name: 'AT LiveOverlay build' },
         { variableId: 'overlay_count', name: 'Overlay count' },
+        { variableId: 'active_scene', name: 'Active scene' },
       ]
       const values = {
         version: data.version || '',
         build: data.build || '',
         overlay_count: overlays.length,
+        active_scene: data.activeScene || '',
       }
 
       for (const overlay of overlays) {
@@ -109,7 +115,13 @@ class ATLiveOverlayInstance extends InstanceBase {
       this.setVariableValues(values)
       this.checkFeedbacks()
     } catch (error) {
-      this.updateStatus(InstanceStatus.ConnectionFailure, error.message)
+      this.statusData = null
+      if (error.status === 401) {
+        this.updateStatus(InstanceStatus.AuthenticationFailure, 'Invalid API token - copy it again from AT LiveOverlay > Remote control')
+      } else {
+        this.updateStatus(InstanceStatus.ConnectionFailure, error.message)
+      }
+      this.checkFeedbacks()
     }
   }
 
@@ -196,6 +208,16 @@ class ATLiveOverlayInstance extends InstanceBase {
         options: [this.overlayOption()],
         callback: (feedback) => Boolean(this.statusData?.overlays?.find((o) => o.Id === feedback.options.id)),
       },
+      scene_active: {
+        name: 'Scene is active',
+        type: 'boolean',
+        defaultStyle: { bgcolor: 0x0066cc, color: 0xffffff },
+        options: [{ type: 'textinput', id: 'name', label: 'Scene name', default: '', useVariables: true }],
+        callback: async (feedback) => {
+          const name = await this.parseVariablesInString(feedback.options.name)
+          return Boolean(name) && this.statusData?.activeScene === name
+        },
+      },
     })
   }
 
@@ -204,16 +226,61 @@ class ATLiveOverlayInstance extends InstanceBase {
       { variableId: 'version', name: 'AT LiveOverlay version' },
       { variableId: 'build', name: 'AT LiveOverlay build' },
       { variableId: 'overlay_count', name: 'Overlay count' },
+      { variableId: 'active_scene', name: 'Active scene' },
     ])
   }
 
   initPresets() {
     const style = { text: '$(this:action)', size: 'auto', color: 0xffffff, bgcolor: 0x222222 }
     this.setPresetDefinitions({
-      show: { type: 'button', category: 'Overlay 1', name: 'Show overlay 1', style: { ...style, text: 'SHOW\nOVERLAY' }, steps: [{ down: [{ actionId: 'show', options: { id: 1 } }], up: [] }], feedbacks: [] },
-      hide: { type: 'button', category: 'Overlay 1', name: 'Hide overlay 1', style: { ...style, text: 'HIDE\nOVERLAY' }, steps: [{ down: [{ actionId: 'hide', options: { id: 1 } }], up: [] }], feedbacks: [] },
-      reload: { type: 'button', category: 'Overlay 1', name: 'Reload overlay 1', style: { ...style, text: 'RELOAD\nOVERLAY' }, steps: [{ down: [{ actionId: 'reload', options: { id: 1 } }], up: [] }], feedbacks: [] },
-      lock: { type: 'button', category: 'Overlay 1', name: 'Lock overlay 1', style: { ...style, text: 'LOCK\nOVERLAY' }, steps: [{ down: [{ actionId: 'lock', options: { id: 1 } }], up: [] }], feedbacks: [] },
+      show: {
+        type: 'button', category: 'Overlay 1', name: 'Show overlay 1',
+        style: { ...style, text: 'SHOW\nOVERLAY' },
+        steps: [{ down: [{ actionId: 'show', options: { id: 1 } }], up: [] }],
+        feedbacks: [{ feedbackId: 'visible', options: { id: 1 } }],
+      },
+      hide: {
+        type: 'button', category: 'Overlay 1', name: 'Hide overlay 1',
+        style: { ...style, text: 'HIDE\nOVERLAY' },
+        steps: [{ down: [{ actionId: 'hide', options: { id: 1 } }], up: [] }],
+        feedbacks: [],
+      },
+      reload: {
+        type: 'button', category: 'Overlay 1', name: 'Reload overlay 1',
+        style: { ...style, text: 'RELOAD\nOVERLAY' },
+        steps: [{ down: [{ actionId: 'reload', options: { id: 1 } }], up: [] }],
+        feedbacks: [{ feedbackId: 'exists', options: { id: 1 } }],
+      },
+      lock: {
+        type: 'button', category: 'Overlay 1', name: 'Lock overlay 1',
+        style: { ...style, text: 'LOCK\nOVERLAY' },
+        steps: [{ down: [{ actionId: 'lock', options: { id: 1 } }], up: [] }],
+        feedbacks: [{ feedbackId: 'locked', options: { id: 1 } }],
+      },
+      show_all: {
+        type: 'button', category: 'All overlays', name: 'Show all overlays',
+        style: { ...style, text: 'SHOW\nALL' },
+        steps: [{ down: [{ actionId: 'show_all', options: {} }], up: [] }],
+        feedbacks: [],
+      },
+      hide_all: {
+        type: 'button', category: 'All overlays', name: 'Hide all overlays',
+        style: { ...style, text: 'HIDE\nALL' },
+        steps: [{ down: [{ actionId: 'hide_all', options: {} }], up: [] }],
+        feedbacks: [],
+      },
+      reload_all: {
+        type: 'button', category: 'All overlays', name: 'Reload all overlays',
+        style: { ...style, text: 'RELOAD\nALL' },
+        steps: [{ down: [{ actionId: 'reload_all', options: {} }], up: [] }],
+        feedbacks: [],
+      },
+      load_scene_example: {
+        type: 'button', category: 'Scenes', name: 'Load scene (edit the name)',
+        style: { ...style, text: 'LOAD\nSCENE' },
+        steps: [{ down: [{ actionId: 'load_scene', options: { name: 'My scene' } }], up: [] }],
+        feedbacks: [{ feedbackId: 'scene_active', options: { name: 'My scene' } }],
+      },
     })
   }
 }

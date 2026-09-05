@@ -1,4 +1,4 @@
-$required = [version]'4.0.3.0'
+$required = [version]'4.1.0.0'
 $exe = 'C:\Program Files\AT LiveOverlay\ATLiveOverlay.exe'
 if (-not (Test-Path -LiteralPath $exe)) { Write-Output 'Not installed'; exit 1 }
 try { $installed = [version](Get-Item -LiteralPath $exe).VersionInfo.FileVersion }

@@ -1,3 +1,11 @@
+AT LiveOverlay v4.1.0
+
+- Overlays now auto-retry every 5 seconds if the target page fails to load (server down, network hiccup), instead of sitting on a browser error page until someone notices mid-show.
+- Added "Backup settings..." / "Restore settings..." to the tray menu to clone a full setup (overlays, scenes, token) to a backup rig.
+- The Position menu now includes "Move to monitor" on multi-display machines.
+- The app now tracks the active scene name, exposed via /status as activeScene.
+- Companion module deep dive: distinguishes an invalid API token (Authentication failure) from a generic connection error, wires the visible/locked/exists feedbacks onto the bundled presets so button colors reflect live state, adds active-scene tracking (variable + feedback) and more presets (show/hide/reload all, load scene).
+
 AT LiveOverlay v4.0.3
 
 - Fixed a freeze: opening About while an overlay was on-screen could hang the whole app behind the always-on-top overlay window (same class of bug the URL editor had before v3.3.1), with no way out short of a force-close.
