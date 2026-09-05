@@ -96,6 +96,9 @@ foreach($file in $files){
 }
 [void]$sb.AppendLine('      <Component Id="MenuFolderComponent" Directory="AppMenuFolder" Guid="*"><RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\AT\AT LiveOverlay" Name="installed" Type="integer" Value="1" KeyPath="yes" /></Component>')
 [void]$sb.AppendLine('      <Component Id="InstallFolderCleanup" Directory="INSTALLFOLDER" Guid="*"><RemoveFolder Id="RemoveInstallFolder" On="uninstall" /><RegistryValue Root="HKLM" Key="Software\AT\AT LiveOverlay" Name="InstallFolderCleanup" Type="integer" Value="1" KeyPath="yes" /></Component>')
+# Registry Run key (not a Startup-folder shortcut - some Group Policies block those outright) so the
+# app launches automatically at Windows sign-in for every user of this machine.
+[void]$sb.AppendLine('      <Component Id="StartupRegistration" Directory="INSTALLFOLDER" Guid="*"><RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="AT LiveOverlay" Type="string" Value="&quot;[#'+$exeFileId+']&quot;" KeyPath="yes" /></Component>')
 [void]$sb.AppendLine('    </ComponentGroup>')
 [void]$sb.AppendLine('  </Fragment>')
 [void]$sb.AppendLine('  <Fragment><Icon Id="AppIcon" SourceFile="'+(Esc (Join-Path $PublishDir 'app.ico'))+'" /></Fragment>')

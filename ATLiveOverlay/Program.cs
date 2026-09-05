@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
@@ -16,6 +17,17 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        // The installer registers an HKLM Run entry so the app starts automatically at Windows
+        // login, in addition to the app's own optional per-user "Start with Windows" toggle. Guard
+        // against a resulting double-launch (or a plain accidental double-click) exiting silently
+        // rather than spawning a second tray icon and Companion server that can't bind port 8765.
+        using var singleInstanceMutex = new Mutex(initiallyOwned: true, "ATLiveOverlay_SingleInstance", out var createdNew);
+        if (!createdNew)
+        {
+            Log.Info("Another AT LiveOverlay instance is already running; exiting.");
+            return;
+        }
+
         ApplicationConfiguration.Initialize();
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.ThreadException += (_, e) => Log.Exception(e.Exception);

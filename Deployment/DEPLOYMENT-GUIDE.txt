@@ -14,6 +14,9 @@ Run UNINSTALL-SILENT.ps1 as LocalSystem or administrator.
 FIREWALL
 The MSI adds and owns the rule "AT LiveOverlay Companion" for TCP 8765 on Private profiles, limited to the local subnet. The rule is removed automatically by MSI uninstall.
 
+AUTOMATIC STARTUP
+The MSI adds an HKLM\Software\Microsoft\Windows\CurrentVersion\Run entry named "AT LiveOverlay", so the app launches automatically at sign-in for every user of the machine. This is removed automatically by MSI uninstall. Some environments restrict Run-key entries via Group Policy; if AT LiveOverlay should not auto-start on a given machine, remove that value after install.
+
 UPGRADES
 Every release keeps the permanent UpgradeCode F4D7C037-96CC-4EF5-B75A-5438F62FD8F7. WiX MajorUpgrade removes the older MSI while preserving per-user AT LiveOverlay settings.
 
