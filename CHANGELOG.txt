@@ -1,3 +1,9 @@
+AT LiveOverlay v4.1.1
+
+- Security hardening: the update flow now uses the validated version number instead of the raw GitHub release tag text when building the temp installer path and the elevated (runas) msiexec command line, and validates asset/release URLs are https. Closes a theoretical argument-injection path if a release feed were ever spoofed.
+- Fixed a real bug: Companion's "Set overlay URL" action and /overlay/<id>/seturl updated the stored URL but only reloaded the currently-displayed page - the new URL never actually loaded until the next app restart.
+- Restore settings / Load scene no longer crash on a corrupted or hand-edited backup file with explicit null overlay/scene lists.
+
 AT LiveOverlay v4.1.0
 
 - Overlays now auto-retry every 5 seconds if the target page fails to load (server down, network hiccup), instead of sitting on a browser error page until someone notices mid-show.

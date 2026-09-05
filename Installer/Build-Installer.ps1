@@ -10,7 +10,7 @@ $ToolsDir = Join-Path $Root '.tools'
 $WixExe = Join-Path $ToolsDir 'wix.exe'
 $Project = Join-Path $Root 'ATLiveOverlay\ATLiveOverlay.csproj'
 $NugetConfig = Join-Path $Root 'NuGet.Config'
-$MsiPath = Join-Path $FinalDir 'AT-LiveOverlay-v4.1.0-Setup.msi'
+$MsiPath = Join-Path $FinalDir 'AT-LiveOverlay-v4.1.1-Setup.msi'
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 if (Test-Path $LogFile) { Remove-Item $LogFile -Force }
@@ -35,7 +35,7 @@ function Invoke-Native {
 try {
     Clear-Host
     Write-Host '============================================================'
-    Write-Host '         AT LIVEOVERLAY v4.1.0 - FINAL MSI BUILDER'
+    Write-Host '         AT LIVEOVERLAY v4.1.1 - FINAL MSI BUILDER'
     Write-Host '============================================================'
     Write-Host "Build log: $LogFile"
 
@@ -128,12 +128,12 @@ try {
     Set-Content -LiteralPath ($MsiPath + '.sha256') -Value ($Hash + '  ' + [IO.Path]::GetFileName($MsiPath)) -Encoding ASCII
     $ReleaseInfo = [ordered]@{
         product = 'AT LiveOverlay'
-        version = '4.1.0'
+        version = '4.1.1'
         installer = [IO.Path]::GetFileName($MsiPath)
         sha256 = $Hash
-        silentInstall = 'msiexec.exe /i "' + [IO.Path]::GetFileName($MsiPath) + '" /qn /norestart /L*v "%ProgramData%\AT LiveOverlay\Logs\install-4.1.0.log"'
+        silentInstall = 'msiexec.exe /i "' + [IO.Path]::GetFileName($MsiPath) + '" /qn /norestart /L*v "%ProgramData%\AT LiveOverlay\Logs\install-4.1.1.log"'
         detectionFile = 'C:\Program Files\AT LiveOverlay\ATLiveOverlay.exe'
-        minimumFileVersion = '4.1.0.0'
+        minimumFileVersion = '4.1.1.0'
         companionPort = 8765
         firewallProfile = 'Private'
     }
