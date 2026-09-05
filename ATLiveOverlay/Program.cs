@@ -642,7 +642,7 @@ internal sealed class OverlayForm : Form
         });
 
         AddButton("Pin", ToggleControlsPinned);
-        AddButton("About", AboutForm.ShowAbout);
+        AddButton("About", ShowAboutFromOverlay);
         AddButton("Hide", HideOverlay);
         AddButton("Close", () => _remove(this), Color.Firebrick);
 
@@ -935,6 +935,23 @@ internal sealed class OverlayForm : Form
         }
     }
 
+    private void ShowAboutFromOverlay()
+    {
+        var wasClickThrough = Model.ClickThrough;
+        try
+        {
+            ShowToolbar();
+            SetClickThrough(false);
+            AboutForm.ShowAbout(this);
+        }
+        finally
+        {
+            SetClickThrough(wasClickThrough);
+            Activate();
+            ScheduleToolbarHide();
+        }
+    }
+
     private enum ScreenAnchor { TopLeft, TopCenter, TopRight, Center, BottomLeft, BottomCenter, BottomRight }
 
     private void ShowPositionMenu()
@@ -1189,6 +1206,7 @@ internal sealed class AboutForm : Form
         MaximumSize = new Size(780, 600);
         Icon = Branding.LoadAppIcon();
         BackColor = Color.White;
+        TopMost = true;
 
         var root = new TableLayoutPanel
         {
@@ -1371,10 +1389,14 @@ internal sealed class AboutForm : Form
         CancelButton = ok;
     }
 
-    public static void ShowAbout()
+    // An owned, always-on-top overlay can otherwise sit above a plain (non-topmost) modal dialog
+    // while still blocking the UI thread, which makes the whole app appear frozen. See UrlPrompt
+    // for the same fix applied to the URL editor.
+    public static void ShowAbout(IWin32Window? owner = null)
     {
         using var form = new AboutForm();
-        form.ShowDialog();
+        if (owner is null) form.ShowDialog();
+        else form.ShowDialog(owner);
     }
 }
 
