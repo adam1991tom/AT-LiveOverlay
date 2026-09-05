@@ -8,10 +8,10 @@ $content = @(
   'namespace ATLiveOverlay;'
   'internal static class BuildInfo'
   '{'
-  '    public const string Version = "4.0.1";'
+  '    public const string Version = "4.0.2";'
   ('    public const string Build = "' + $stamp + '";')
   ('    public const string BuiltOn = "' + $built + '";')
   '}'
 )
 [IO.File]::WriteAllLines($OutputFile, $content, (New-Object Text.UTF8Encoding($false)))
-Write-Host "Generated build metadata: Version 4.0.1, Build $stamp"
+Write-Host "Generated build metadata: Version 4.0.2, Build $stamp"
