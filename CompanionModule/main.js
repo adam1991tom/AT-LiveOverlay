@@ -102,6 +102,7 @@ class ATLiveOverlayInstance extends InstanceBase {
           { variableId: `overlay_${id}_locked`, name: `Overlay ${id} locked` },
           { variableId: `overlay_${id}_opacity`, name: `Overlay ${id} opacity %` },
           { variableId: `overlay_${id}_refresh`, name: `Overlay ${id} refresh seconds` },
+          { variableId: `overlay_${id}_rotation`, name: `Overlay ${id} rotation degrees` },
         )
         values[`overlay_${id}_name`] = overlay.Name || ''
         values[`overlay_${id}_url`] = overlay.Url || ''
@@ -109,6 +110,7 @@ class ATLiveOverlayInstance extends InstanceBase {
         values[`overlay_${id}_locked`] = overlay.locked ? 'yes' : 'no'
         values[`overlay_${id}_opacity`] = overlay.opacity ?? ''
         values[`overlay_${id}_refresh`] = overlay.refreshSeconds ?? ''
+        values[`overlay_${id}_rotation`] = overlay.rotationDegrees ?? 0
       }
 
       this.setVariableDefinitions(definitions)
@@ -162,6 +164,25 @@ class ATLiveOverlayInstance extends InstanceBase {
         name: 'Set auto-refresh seconds',
         options: [this.overlayOption(), { type: 'number', id: 'seconds', label: 'Seconds (0 disables)', default: 0, min: 0, max: 3600 }],
         callback: async (event) => this.request(`/overlay/${event.options.id}/refresh?seconds=${event.options.seconds}`),
+      },
+      rotate: {
+        name: 'Set overlay rotation',
+        options: [
+          this.overlayOption(),
+          {
+            type: 'dropdown',
+            id: 'degrees',
+            label: 'Rotation (for a monitor mounted sideways)',
+            default: 0,
+            choices: [
+              { id: 0, label: '0° (normal)' },
+              { id: 90, label: '90°' },
+              { id: 180, label: '180°' },
+              { id: 270, label: '270°' },
+            ],
+          },
+        ],
+        callback: async (event) => this.request(`/overlay/${event.options.id}/rotate?degrees=${event.options.degrees}`),
       },
       create: {
         name: 'Create overlay',

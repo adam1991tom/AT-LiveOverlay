@@ -610,6 +610,8 @@ internal sealed class OverlayForm : Form
     private readonly FlowLayoutPanel _toolbar;
     private readonly Button _moveButton;
     private Button _positionButton = null!;
+    private Button _rotationButton = null!;
+    private string? _rotationScriptId;
     private readonly NumericUpDown _refreshBox;
     private readonly System.Windows.Forms.Timer _refreshTimer;
     private readonly System.Windows.Forms.Timer _hideToolbarTimer;
@@ -672,6 +674,7 @@ internal sealed class OverlayForm : Form
         AddButton("Reload", ReloadPage);
         AddButton("URL", ChangeUrl);
         _positionButton = AddButton("Position", ShowPositionMenu);
+        _rotationButton = AddButton("Rotate", ShowRotationMenu);
 
         var refreshLabel = new Label
         {
@@ -847,6 +850,11 @@ internal sealed class OverlayForm : Form
 
     private async Task InitializeWebViewAsync()
     {
+        // A fresh CoreWebView2 (initial init, or re-init after a browser-process crash) invalidates
+        // any previously registered script id, so start clean rather than trying to remove a script
+        // that belongs to a CoreWebView2 that may no longer exist.
+        _rotationScriptId = null;
+
         try
         {
             if (!await WebView2Runtime.EnsureInstalledAsync(this))
@@ -871,6 +879,7 @@ internal sealed class OverlayForm : Form
             _webView.CoreWebView2.ProcessFailed += OnWebViewProcessFailed;
             _webView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
             _webView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+            await ApplyRotationAsync(Model.RotationDegrees);
             _webView.Source = NormalizeUri(Model.Url);
         }
         catch (Exception ex)
@@ -1138,6 +1147,82 @@ internal sealed class OverlayForm : Form
         Bounds = new Rectangle(x, y, width, height);
         CaptureBounds();
         _save();
+    }
+
+    // For a monitor that's physically mounted sideways while Windows still reports it as landscape:
+    // rotates the page CONTENT to compensate, leaving the overlay window/toolbar untouched. Applied
+    // via an injected script (not a one-off ExecuteScriptAsync) so it survives every reload/refresh.
+    private void ShowRotationMenu()
+    {
+        var menu = new ContextMenuStrip();
+        void AddRotation(string text, int degrees) =>
+            menu.Items.Add(text, null, (_, _) => SetRotation(degrees));
+        AddRotation("0° (normal)", 0);
+        AddRotation("90°", 90);
+        AddRotation("180°", 180);
+        AddRotation("270°", 270);
+        menu.Show(_rotationButton, new Point(0, _rotationButton.Height));
+    }
+
+    public void SetRotation(int degrees)
+    {
+        if (degrees is not (0 or 90 or 180 or 270)) return;
+        Model.RotationDegrees = degrees;
+        _ = ApplyRotationAsync(degrees);
+        _save();
+    }
+
+    private async Task ApplyRotationAsync(int degrees)
+    {
+        try
+        {
+            var core = _webView.CoreWebView2;
+            if (core is null) return;
+
+            if (_rotationScriptId is not null)
+            {
+                core.RemoveScriptToExecuteOnDocumentCreated(_rotationScriptId);
+                _rotationScriptId = null;
+            }
+
+            var script = BuildRotationScript(degrees);
+            _rotationScriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(script);
+            await core.ExecuteScriptAsync(script);
+        }
+        catch (Exception ex)
+        {
+            Log.Exception(ex);
+        }
+    }
+
+    private static string BuildRotationScript(int degrees)
+    {
+        // Rotating the box 90deg clockwise (or -90deg counter-clockwise) about its top-left corner
+        // displaces it, so a translate brings it back to exactly cover the original viewport - the
+        // usual pure-CSS "rotate the whole page" trick. 180 needs neither swap nor translate since
+        // it re-covers the same box rotating about its own center.
+        var setters = degrees switch
+        {
+            90 => "el.style.setProperty('overflow','hidden','important');" +
+                  "el.style.setProperty('width','100vh','important');" +
+                  "el.style.setProperty('height','100vw','important');" +
+                  "el.style.setProperty('transform-origin','top left','important');" +
+                  "el.style.setProperty('transform','rotate(90deg) translateY(-100%)','important');",
+            180 => "el.style.setProperty('overflow','hidden','important');" +
+                   "el.style.setProperty('width','100vw','important');" +
+                   "el.style.setProperty('height','100vh','important');" +
+                   "el.style.setProperty('transform','rotate(180deg)','important');",
+            270 => "el.style.setProperty('overflow','hidden','important');" +
+                   "el.style.setProperty('width','100vh','important');" +
+                   "el.style.setProperty('height','100vw','important');" +
+                   "el.style.setProperty('transform-origin','top left','important');" +
+                   "el.style.setProperty('transform','rotate(-90deg) translateX(-100%)','important');",
+            _ => "",
+        };
+        return "(function(){var el=document.documentElement;" +
+               "el.style.removeProperty('overflow');el.style.removeProperty('width');el.style.removeProperty('height');" +
+               "el.style.removeProperty('transform');el.style.removeProperty('transform-origin');" +
+               setters + "})();";
     }
 
     public void ReloadPage()
@@ -1766,6 +1851,7 @@ internal sealed class RemoteControlForm : Form
                    $"/overlay/1/edit?token={token}\n/overlay/1/live?token={token}\n/overlay/1/lock?token={token}\n/overlay/1/unlock?token={token}\n" +
                    $"/overlay/1/close?token={token}\n/overlay/1/seturl?token={token}&url=http%3A%2F%2Fserver%2Ftimer\n" +
                    $"/overlay/1/opacity?token={token}&value=75\n/overlay/1/refresh?token={token}&seconds=30\n" +
+                   $"/overlay/1/rotate?token={token}&degrees=90\n" +
                    $"/overlay/create?token={token}&url=http%3A%2F%2Fserver%2Ftimer\n" +
                    $"/overlay/all/show?token={token}\n/overlay/all/hide?token={token}\n/overlay/all/reload?token={token}\n\n" +
                    $"/scene/list?token={token}\n/scene/load?token={token}&name=MyScene\n\n" +
@@ -1931,7 +2017,8 @@ internal sealed class CompanionServer : IDisposable
                             visible = f.Visible,
                             locked = f.Model.ClickThrough,
                             opacity = f.Model.OpacityPercent,
-                            refreshSeconds = f.Model.RefreshSeconds
+                            refreshSeconds = f.Model.RefreshSeconds,
+                            rotationDegrees = f.Model.RotationDegrees
                         })
                     });
                     contentType = "application/json; charset=utf-8";
@@ -2006,6 +2093,10 @@ internal sealed class CompanionServer : IDisposable
                             case "refresh":
                                 if (query.TryGetValue("seconds", out var secondsValue) && int.TryParse(secondsValue, out var seconds))
                                     form.SetRefreshSeconds(seconds);
+                                break;
+                            case "rotate":
+                                if (query.TryGetValue("degrees", out var degreesValue) && int.TryParse(degreesValue, out var degrees))
+                                    form.SetRotation(degrees);
                                 break;
                         }
                     });
@@ -2153,6 +2244,7 @@ internal sealed class OverlaySettings
     public bool ClickThrough { get; set; }
     public int RefreshSeconds { get; set; }
     public int OpacityPercent { get; set; } = 100;
+    public int RotationDegrees { get; set; }
 }
 
 internal static class SettingsStore
