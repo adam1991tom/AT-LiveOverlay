@@ -320,13 +320,23 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     public IReadOnlyList<OverlayForm> Forms => _forms;
     public string ApiToken => _settings.ApiToken!;
 
+    // Reuses the lowest free number instead of counting up forever, so closing overlay #1 and
+    // creating a new one gives back #1 rather than jumping to whatever came after it historically.
+    private int NextAvailableId()
+    {
+        var used = new HashSet<int>(_settings.Overlays.Select(o => o.Id));
+        var id = 1;
+        while (used.Contains(id)) id++;
+        return id;
+    }
+
     public void NewOverlay(string? initialUrl = null)
     {
         var previous = _settings.LastUrl ?? "http://10.100.70.101:4007/timer";
         var url = initialUrl ?? UrlPrompt.Show(previous);
         if (string.IsNullOrWhiteSpace(url)) return;
 
-        var id = _settings.NextId++;
+        var id = NextAvailableId();
         var model = new OverlaySettings
         {
             Id = id,
@@ -423,8 +433,6 @@ internal sealed class OverlayApplicationContext : ApplicationContext
 
         foreach (var form in _forms.ToList()) form.ClosePermanently();
         _settings.Overlays = scene.Overlays.Select(CloneOverlay).ToList();
-        if (_settings.Overlays.Count > 0)
-            _settings.NextId = Math.Max(_settings.NextId, _settings.Overlays.Max(o => o.Id) + 1);
         SettingsStore.Save(_settings);
 
         foreach (var overlay in _settings.Overlays.Where(o => o.Enabled).ToList())
@@ -1870,7 +1878,6 @@ internal sealed class HotkeyManager : NativeWindow, IDisposable
 internal sealed class AppSettings
 {
     public int SchemaVersion { get; set; }
-    public int NextId { get; set; } = 1;
     public string? LastUrl { get; set; }
     public string? ApiToken { get; set; }
     public List<OverlaySettings> Overlays { get; set; } = new();
