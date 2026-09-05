@@ -1,12 +1,12 @@
 # AT LiveOverlay Companion Module v1.1.0
 
-Development module for Bitfocus Companion. It connects to the AT LiveOverlay v4.0.0 HTTP API on TCP port 8765.
+Development module for Bitfocus Companion. It connects to the AT LiveOverlay v4.0.1 HTTP API on TCP port 8765.
 
 The API token config field uses Companion's `secret-text` input type, so it is masked in the configuration UI once saved. A `companion/manifest.json` is included as required by current Companion module builds.
 
 ## Setup
 
-1. Install AT LiveOverlay v4.0.0 and open **Remote control** from its tray menu.
+1. Install AT LiveOverlay v4.0.1 and open **Remote control** from its tray menu.
 2. Click **Enable Windows Firewall access**.
 3. Copy the **API token** shown in the Remote control window.
 4. Install Node.js 18 or later on the Companion development machine.

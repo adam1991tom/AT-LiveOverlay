@@ -1,3 +1,9 @@
+AT LiveOverlay v4.0.1
+
+- Fixed unreadable black-on-black text on the installer's Welcome/Exit/banner pages by rebuilding banner.bmp and dialog.bmp with white backgrounds.
+- Fixed the "Launch AT LiveOverlay" checkbox on the installer's finish page, which previously did nothing.
+- "Check for updates" now shows the current version number in the already-up-to-date message.
+
 AT LiveOverlay v4.0.0
 
 - Companion API now requires a per-install token (generated automatically, shown in Remote Control) instead of being open to anyone on the LAN.
