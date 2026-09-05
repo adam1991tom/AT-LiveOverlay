@@ -88,14 +88,17 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 {
                     var name = asset.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
                     var downloadUrl = asset.TryGetProperty("browser_download_url", out var urlProp2) ? urlProp2.GetString() : null;
-                    if (name is null || downloadUrl is null) continue;
+                    if (name is null || !IsHttpsUrl(downloadUrl)) continue;
                     if (name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase)) assetUrl = downloadUrl;
                     else if (name.EndsWith(".msi.sha256", StringComparison.OrdinalIgnoreCase)) checksumUrl = downloadUrl;
                 }
             }
 
-            _updateVersion = tag;
-            _updateReleaseUrl = releaseUrl;
+            // Use the parsed, validated version (digits and dots only) rather than the raw tag text
+            // from here on: it ends up in a file path and an elevated process's command line, and the
+            // raw tag is attacker-influenceable if the release feed or its transport is ever spoofed.
+            _updateVersion = latest.ToString();
+            _updateReleaseUrl = IsHttpsUrl(releaseUrl) ? releaseUrl : null;
             _updateAssetUrl = assetUrl;
             _updateChecksumUrl = checksumUrl;
 
@@ -172,7 +175,10 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _updateItem!.Enabled = false;
             _updateItem.Text = "Downloading update...";
 
-            var tempPath = Path.Combine(Path.GetTempPath(), $"AT-LiveOverlay-{_updateVersion}-Setup.msi");
+            // Fixed filename rather than one built from network-sourced text: _updateVersion is
+            // validated (digits/dots only) by this point, but keeping this path independent of any
+            // remote data entirely is one less thing that could ever matter given this runs elevated.
+            var tempPath = Path.Combine(Path.GetTempPath(), "AT-LiveOverlay-Update.msi");
             using (var client = new HttpClient())
             {
                 client.DefaultRequestHeaders.UserAgent.ParseAdd("AT-LiveOverlay-UpdateCheck");
@@ -214,6 +220,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         if (string.IsNullOrWhiteSpace(text)) return null;
         return Version.TryParse(text.TrimStart('v', 'V'), out var version) ? version : null;
     }
+
+    private static bool IsHttpsUrl(string? url) =>
+        !string.IsNullOrWhiteSpace(url) && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps;
 
     private void RegisterHotkeys()
     {
@@ -481,7 +490,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         if (scene is null) return false;
 
         foreach (var form in _forms.ToList()) form.ClosePermanently();
-        _settings.Overlays = scene.Overlays.Select(CloneOverlay).ToList();
+        _settings.Overlays = (scene.Overlays ?? new List<OverlaySettings>()).Select(CloneOverlay).ToList();
         SettingsStore.Save(_settings);
 
         foreach (var overlay in _settings.Overlays.Where(o => o.Enabled).ToList())
@@ -555,8 +564,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _settings.SchemaVersion = loaded.SchemaVersion;
             _settings.LastUrl = loaded.LastUrl;
             if (!string.IsNullOrWhiteSpace(loaded.ApiToken)) _settings.ApiToken = loaded.ApiToken;
-            _settings.Overlays = loaded.Overlays;
-            _settings.Scenes = loaded.Scenes;
+            _settings.Overlays = loaded.Overlays ?? new List<OverlaySettings>();
+            _settings.Scenes = loaded.Scenes ?? new List<Scene>();
             SettingsStore.Save(_settings);
 
             foreach (var overlay in _settings.Overlays.Where(o => o.Enabled).ToList())
@@ -1134,6 +1143,19 @@ internal sealed class OverlayForm : Form
     public void ReloadPage()
     {
         try { _webView.CoreWebView2?.Reload(); } catch (Exception ex) { Log.Exception(ex); }
+    }
+
+    // Reload() only re-fetches whatever is currently loaded - it does not pick up a Model.Url change
+    // on its own. The Companion "seturl" HTTP command needs an actual navigation, same as ChangeUrl.
+    public void SetUrl(string url)
+    {
+        try
+        {
+            Model.Url = url.Trim();
+            _webView.Source = NormalizeUri(Model.Url);
+            _save();
+        }
+        catch (Exception ex) { Log.Exception(ex); }
     }
 
     public void SetOpacityPercent(int value)
@@ -1975,11 +1997,7 @@ internal sealed class CompanionServer : IDisposable
                             case "close": form.ClosePermanently(); break;
                             case "seturl":
                                 if (query.TryGetValue("url", out var newUrl) && !string.IsNullOrWhiteSpace(newUrl))
-                                {
-                                    form.Model.Url = newUrl;
-                                    form.ReloadPage();
-                                    _app.SaveSettings();
-                                }
+                                    form.SetUrl(newUrl);
                                 break;
                             case "opacity":
                                 if (query.TryGetValue("value", out var opacityValue) && int.TryParse(opacityValue, out var opacity))
