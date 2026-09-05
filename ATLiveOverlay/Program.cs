@@ -48,7 +48,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         ShowSplashThenStart();
     }
 
-    private async Task CheckForUpdatesAsync(bool manual)
+    private enum UpdateCheckOutcome { UpdateAvailable, UpToDate, Error }
+
+    private async Task<UpdateCheckOutcome> CheckForUpdatesCoreAsync()
     {
         try
         {
@@ -64,11 +66,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             var latest = ParseVersion(tag);
             var current = ParseVersion(BuildInfo.Version);
             if (latest is null || current is null || latest <= current)
-            {
-                if (manual)
-                    MessageBox.Show($"You already have the latest version of AT LiveOverlay (v{BuildInfo.Version}).", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
+                return UpdateCheckOutcome.UpToDate;
 
             string? assetUrl = null;
             string? checksumUrl = null;
@@ -94,12 +92,45 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 _updateItem.Text = $"Update available: {tag}";
                 _updateItem.Visible = true;
             }
+            return UpdateCheckOutcome.UpdateAvailable;
         }
         catch (Exception ex)
         {
             Log.Exception(ex);
-            if (manual)
+            return UpdateCheckOutcome.Error;
+        }
+    }
+
+    // Shows a "Checking..." indicator, then walks straight into the download-and-install
+    // confirmation when an update is found, instead of making the user notice and click the
+    // tray item a second time.
+    private async Task CheckForUpdatesInteractiveAsync()
+    {
+        using var checkingForm = new CheckingUpdatesForm();
+        checkingForm.Show();
+        checkingForm.Refresh();
+
+        UpdateCheckOutcome outcome;
+        try
+        {
+            outcome = await CheckForUpdatesCoreAsync();
+        }
+        finally
+        {
+            checkingForm.Close();
+        }
+
+        switch (outcome)
+        {
+            case UpdateCheckOutcome.UpdateAvailable:
+                await OnUpdateClickedAsync();
+                break;
+            case UpdateCheckOutcome.UpToDate:
+                MessageBox.Show($"You already have the latest version of AT LiveOverlay (v{BuildInfo.Version}).", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                break;
+            case UpdateCheckOutcome.Error:
                 MessageBox.Show("Could not check for updates. Check your internet connection.", "AT LiveOverlay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                break;
         }
     }
 
@@ -252,7 +283,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             Log.Exception(ex);
         }
 
-        _ = CheckForUpdatesAsync(false);
+        _ = CheckForUpdatesCoreAsync();
 
         if (_settings.Overlays.Count == 0)
         {
@@ -270,7 +301,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _updateItem = new ToolStripMenuItem("Update available") { Visible = false, ForeColor = Color.FromArgb(238, 124, 25) };
         _updateItem.Click += async (_, _) => await OnUpdateClickedAsync();
         menu.Items.Add(_updateItem);
-        menu.Items.Add("Check for updates...", null, async (_, _) => await CheckForUpdatesAsync(true));
+        menu.Items.Add("Check for updates...", null, async (_, _) => await CheckForUpdatesInteractiveAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("New overlay", null, (_, _) => NewOverlay());
         menu.Items.Add(new ToolStripMenuItem("Show/hide all", null, (_, _) => ToggleShowHideAll()) { ShortcutKeyDisplayString = "Ctrl+Alt+O" });
@@ -1429,6 +1460,48 @@ internal static class UrlPrompt
             box.Focus();
         };
         return (owner is null ? form.ShowDialog() : form.ShowDialog(owner)) == DialogResult.OK ? box.Text : null;
+    }
+}
+
+internal sealed class CheckingUpdatesForm : Form
+{
+    public CheckingUpdatesForm()
+    {
+        Text = "AT LiveOverlay";
+        StartPosition = FormStartPosition.CenterScreen;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ControlBox = false;
+        ShowInTaskbar = false;
+        AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(320, 110);
+        MinimumSize = new Size(320, 110);
+        Icon = Branding.LoadAppIcon();
+        TopMost = true;
+
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), ColumnCount = 1, RowCount = 2 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var label = new Label
+        {
+            Text = "Checking for updates...",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 11),
+            Margin = new Padding(0, 0, 0, 16)
+        };
+        var progress = new ProgressBar
+        {
+            Style = ProgressBarStyle.Marquee,
+            MarqueeAnimationSpeed = 24,
+            Width = 264,
+            Height = 20
+        };
+
+        layout.Controls.Add(label, 0, 0);
+        layout.Controls.Add(progress, 0, 1);
+        Controls.Add(layout);
     }
 }
 
