@@ -1,3 +1,10 @@
+AT LiveOverlay v4.0.3
+
+- Fixed a freeze: opening About while an overlay was on-screen could hang the whole app behind the always-on-top overlay window (same class of bug the URL editor had before v3.3.1), with no way out short of a force-close.
+- "Check for updates" now shows a "Checking..." indicator, then walks straight into the install confirmation or an up-to-date message.
+- The installer now registers AT LiveOverlay to launch automatically at Windows sign-in for every user of the machine (HKLM Run key, removed on uninstall).
+- Added a single-instance guard so a double-launch can't create a second tray icon or Companion server.
+
 AT LiveOverlay v4.0.2
 
 - Overlay numbers now reuse the lowest free number instead of counting up forever: closing overlay #1 and creating a new one gives back #1, not the next unused higher number.
