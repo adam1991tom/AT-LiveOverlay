@@ -15,8 +15,17 @@ namespace ATLiveOverlay;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        // Login launches come from a Run entry carrying --autostart. The installer's machine-wide HKLM
+        // entry can't be removed by a standard user, so honor this user's "Start with Windows" opt-out
+        // here by quietly exiting instead.
+        if (args.Any(a => string.Equals(a, StartupManager.AutostartArgument, StringComparison.OrdinalIgnoreCase))
+            && !StartupManager.IsEnabled())
+        {
+            return;
+        }
+
         // The installer registers an HKLM Run entry so the app starts automatically at Windows
         // login, in addition to the app's own optional per-user "Start with Windows" toggle. Guard
         // against a resulting double-launch (or a plain accidental double-click) exiting silently
@@ -41,6 +50,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     private readonly AppSettings _settings;
     private readonly List<OverlayForm> _forms = new();
     private NotifyIcon? _tray;
+    private TrayMenu? _trayMenu;
     private CompanionServer? _server;
     private SplashForm? _splash;
     private System.Windows.Forms.Timer? _splashTimer;
@@ -318,7 +328,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
 
     private void BuildTray()
     {
-        var menu = new ContextMenuStrip();
+        var menu = new TrayMenu();
         _updateItem = new ToolStripMenuItem("Update available") { Visible = false, ForeColor = Color.FromArgb(238, 124, 25) };
         _updateItem.Click += async (_, _) => await OnUpdateClickedAsync();
         menu.Items.Add(_updateItem);
@@ -357,12 +367,19 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit AT LiveOverlay", null, (_, _) => ExitApplication());
 
+        // Not assigned to NotifyIcon.ContextMenuStrip: the stock path sizes and places the menu for the
+        // wrong monitor on mixed-DPI setups. TrayMenu.ShowAtCursor handles it for the tray icon's monitor.
+        _trayMenu = menu;
+        menu.Opening += (_, _) => startupItem.Checked = StartupManager.IsEnabled();
         _tray = new NotifyIcon
         {
             Text = $"AT LiveOverlay v{BuildInfo.Version}",
             Icon = Branding.LoadAppIcon(),
-            Visible = true,
-            ContextMenuStrip = menu
+            Visible = true
+        };
+        _tray.MouseUp += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Right) _trayMenu?.ShowAtCursor();
         };
         _tray.DoubleClick += (_, _) =>
         {
@@ -593,6 +610,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         SaveSettings();
         if (_tray is not null) _tray.Visible = false;
         _tray?.Dispose();
+        _trayMenu?.Dispose();
         ExitThread();
     }
 }
@@ -2303,22 +2321,93 @@ internal static class SettingsStore
 
 internal static class StartupManager
 {
+    public const string AutostartArgument = "--autostart";
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string ValueName = "AT LiveOverlay";
+    // Per-user opt-out. The installer's HKLM Run entry starts the app for every user and needs admin
+    // rights to remove, so unticking "Start with Windows" records this instead and Main exits early.
+    private const string AppKeyPath = @"Software\AT\AT LiveOverlay";
+    private const string OptOutValueName = "StartWithWindowsDisabled";
 
-    public static bool IsEnabled()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-        var value = key?.GetValue(ValueName) as string;
-        return value is not null && string.Equals(value.Trim('"'), Application.ExecutablePath, StringComparison.OrdinalIgnoreCase);
-    }
+    public static bool IsEnabled() => !IsOptedOut() && (HasMachineEntry() || HasUserEntry());
 
     public static void SetEnabled(bool enabled)
     {
+        using (var appKey = Registry.CurrentUser.CreateSubKey(AppKeyPath))
+        {
+            if (enabled) appKey.DeleteValue(OptOutValueName, throwOnMissingValue: false);
+            else appKey.SetValue(OptOutValueName, 1, RegistryValueKind.DWord);
+        }
+
         using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true) ?? Registry.CurrentUser.CreateSubKey(RunKeyPath);
-        if (enabled) key.SetValue(ValueName, $"\"{Application.ExecutablePath}\"");
+        // With the machine-wide entry present, a per-user one would only be a redundant second launch.
+        if (enabled && !HasMachineEntry()) key.SetValue(ValueName, $"\"{Application.ExecutablePath}\" {AutostartArgument}");
         else key.DeleteValue(ValueName, throwOnMissingValue: false);
     }
+
+    private static bool IsOptedOut()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(AppKeyPath, writable: false);
+        return key?.GetValue(OptOutValueName) is int value && value != 0;
+    }
+
+    private static bool HasMachineEntry()
+    {
+        using var key = Registry.LocalMachine.OpenSubKey(RunKeyPath, writable: false);
+        return key?.GetValue(ValueName) is string value && !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool HasUserEntry()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
+        if (key?.GetValue(ValueName) is not string value) return false;
+        // Accepts both the current "\"exe\" --autostart" form and the older bare "\"exe\"" form.
+        var exe = value.Trim();
+        if (exe.StartsWith('"'))
+        {
+            var close = exe.IndexOf('"', 1);
+            if (close > 0) exe = exe[1..close];
+        }
+        return string.Equals(exe, Application.ExecutablePath, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+// Shows the tray menu laid out for the DPI of the monitor the tray icon is on. The stock
+// NotifyIcon.ContextMenuStrip path measures the menu at whatever DPI it last had (WinForms tracks one
+// "current" toolstrip DPI process-wide, which follows the overlay windows), then positions it using that
+// stale size, so on mixed-DPI setups it comes out the wrong size and partly off the tray's screen.
+internal sealed class TrayMenu : ContextMenuStrip
+{
+    public void ShowAtCursor()
+    {
+        var cursor = Cursor.Position;
+        var area = Screen.FromPoint(cursor).WorkingArea;
+
+        // (Re)create the window on the target monitor while hidden: handle creation picks up that
+        // monitor's DPI and rescales the menu's constants and default font to match.
+        Location = cursor;
+        if (IsHandleCreated) RecreateHandle();
+        else CreateHandle();
+        // The default font is swapped without raising FontChanged, so tell the items to re-measure.
+        OnFontChanged(EventArgs.Empty);
+        PerformLayout();
+
+        var size = GetPreferredSize(Size.Empty);
+        // Open up and to the left of the cursor like a standard tray menu, flipping when that would leave
+        // the screen, then keep the whole menu inside the tray monitor's working area.
+        var x = cursor.X - size.Width >= area.Left ? cursor.X - size.Width : cursor.X;
+        var y = cursor.Y - size.Height >= area.Top ? cursor.Y - size.Height : cursor.Y;
+        x = Math.Max(area.Left, Math.Min(x, area.Right - size.Width));
+        y = Math.Max(area.Top, Math.Min(y, area.Bottom - size.Height));
+
+        // Without this the menu won't close when the user clicks somewhere else.
+        SetForegroundWindow(Handle);
+        Show(new Point(x, y));
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
 }
 
 internal static class Branding
