@@ -1,3 +1,8 @@
+AT LiveOverlay v4.2.1
+
+- Fixed the tray icon menu coming out the wrong size and in the wrong place on multi-monitor setups with different scaling: it now sizes itself for the monitor the tray icon is on (not the monitor the overlays are on) and stays fully on that screen.
+- Fixed "Start with Windows" not actually turning off: the installer's machine-wide sign-in entry kept launching the app after it was unticked. Unticking now records a per-user opt-out that the app honors at sign-in, and the tick reflects the real state.
+
 AT LiveOverlay v4.2.0
 
 - Added per-overlay content rotation (0/90/180/270 degrees) for a monitor that's physically mounted sideways while Windows still reports it as landscape: rotates the displayed page content via CSS to compensate, while the overlay window and toolbar stay put. New "Rotate" button on the toolbar, /overlay/<id>/rotate?degrees=N on the HTTP API, rotationDegrees in /status, and a matching Companion action + variable. NOTE: not yet verified on physically rotated hardware - try both 90 and 270 to see which matches your monitor's mounting direction, since it depends on which way it was turned.
