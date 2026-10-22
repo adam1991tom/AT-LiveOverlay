@@ -33,7 +33,7 @@ foreach($file in $files) {
 $sb = New-Object Text.StringBuilder
 [void]$sb.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
 [void]$sb.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui" xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">')
-[void]$sb.AppendLine('  <Package Name="AT LiveOverlay" Manufacturer="AT" Version="4.2.0" UpgradeCode="F4D7C037-96CC-4EF5-B75A-5438F62FD8F7" Scope="perMachine" InstallerVersion="500">')
+[void]$sb.AppendLine('  <Package Name="AT LiveOverlay" Manufacturer="AT" Version="4.2.1" UpgradeCode="F4D7C037-96CC-4EF5-B75A-5438F62FD8F7" Scope="perMachine" InstallerVersion="500">')
 [void]$sb.AppendLine('    <Property Id="ARPPRODUCTICON" Value="AppIcon" />')
 [void]$sb.AppendLine('    <Property Id="ARPCOMMENTS" Value="Professional always-on-top webpage overlays with Bitfocus Companion control." />')
 [void]$sb.AppendLine('    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />')
@@ -97,8 +97,9 @@ foreach($file in $files){
 [void]$sb.AppendLine('      <Component Id="MenuFolderComponent" Directory="AppMenuFolder" Guid="*"><RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\AT\AT LiveOverlay" Name="installed" Type="integer" Value="1" KeyPath="yes" /></Component>')
 [void]$sb.AppendLine('      <Component Id="InstallFolderCleanup" Directory="INSTALLFOLDER" Guid="*"><RemoveFolder Id="RemoveInstallFolder" On="uninstall" /><RegistryValue Root="HKLM" Key="Software\AT\AT LiveOverlay" Name="InstallFolderCleanup" Type="integer" Value="1" KeyPath="yes" /></Component>')
 # Registry Run key (not a Startup-folder shortcut - some Group Policies block those outright) so the
-# app launches automatically at Windows sign-in for every user of this machine.
-[void]$sb.AppendLine('      <Component Id="StartupRegistration" Directory="INSTALLFOLDER" Guid="*"><RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="AT LiveOverlay" Type="string" Value="&quot;[#'+$exeFileId+']&quot;" KeyPath="yes" /></Component>')
+# app launches automatically at Windows sign-in for every user of this machine. --autostart lets the app
+# tell a login launch apart and exit when that user has unticked "Start with Windows" in the tray menu.
+[void]$sb.AppendLine('      <Component Id="StartupRegistration" Directory="INSTALLFOLDER" Guid="*"><RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="AT LiveOverlay" Type="string" Value="&quot;[#'+$exeFileId+']&quot; --autostart" KeyPath="yes" /></Component>')
 [void]$sb.AppendLine('    </ComponentGroup>')
 [void]$sb.AppendLine('  </Fragment>')
 [void]$sb.AppendLine('  <Fragment><Icon Id="AppIcon" SourceFile="'+(Esc (Join-Path $PublishDir 'app.ico'))+'" /></Fragment>')
